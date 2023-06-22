@@ -1,0 +1,58 @@
+[project]
+name = "pydecompile"
+description = "Decompiler written in Python for Python"
+authors = [
+    { name = "Perceval Wajsburt", email = "perceval.wajsburt@gmail.com" }
+]
+readme = "README.md"
+license = { file = "LICENSE" }
+urls.homepage = "https://github.com/perceval/pydecompile/"
+urls.repository = "https://github.com/perceval/pydecompile/"
+dynamic = ["version"]
+requires-python = ">3.7.6,<4.0,!=3.8.1"
+dependencies = [
+    "astunparse",
+]
+
+# ----- Development configuration -----
+[project.optional-dependencies]
+dev = [
+]
+
+[tool.setuptools.dynamic]
+version = { attr = "pydecompile.__version__" }
+
+# ----- Tests -----
+[tool.pytest.ini_options]
+testpaths = [
+    "tests",
+]
+
+[tool.coverage.report]
+exclude_also = [
+    "raise UnknownException"
+]
+
+# ----- Linting & Testing -----
+[tool.ruff]
+fix = true
+exclude = [
+    ".git",
+    "__pycache__",
+    "__init__.py",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".venv",
+    "build",
+    "tests/functions.py"
+]
+ignore = []
+line-length = 200
+select = [
+    "E",
+    "F",
+    "W",
+    "I001"
+]
+fixable = ["E", "F", "W", "I"]
+per-file-ignores = {"**/__init__.py" = "F401"}
