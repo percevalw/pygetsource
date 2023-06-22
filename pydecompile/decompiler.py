@@ -77,6 +77,7 @@ def postprocess_try_finally(node):
                     child = handler.body[0]
 
                     # Lookup "except: e = None; del e" in the handler children
+                    assert isinstance(child, ast.Try)
                     if len(child.finalbody) == 2:
                         fb0 = child.finalbody[0]
                         fb1 = child.finalbody[1]
@@ -172,7 +173,6 @@ def extract_items(args):
 
 
 def build_ast(code: CodeType, as_function=True):
-    print("----------------------")
     bytecode = code.co_code
     offset = 0
 
@@ -200,43 +200,49 @@ def build_ast(code: CodeType, as_function=True):
             f"Unsupported {opname} ({op}) at {op_idx}:\n{bytecode_str}\nCurrent ctx: {ctx_stack}\nCurrent stack: {stack}"
         )
 
-    def add_instruction(inst, start=None):
-        nonlocal next_instruction_idx
-        instructions.append((next_instruction_idx if start is None else start, inst))
-        next_instruction_idx = offset
+    def add_instruction(inst, start: int):
+        #nonlocal next_instruction_idx
+        instructions.append((start, inst))
+        print(" > INST", start, ast.dump(inst) if isinstance(inst, ast.AST) else None)
+        #op_idx = offset
 
-    def add_stack(node, start=None):
-        stack.append((op_idx if start is None else None, node))
+    def add_stack(node, start):
+        stack.append((op_idx if start is None else start, node))
+
+    def unzip_stack(n):
+        elements = [stack.pop() for _ in range(n)][::-1]
+        return zip(*elements) if len(elements) else ((), ())
 
     ctx_stack = []
     instructions: List[Tuple[int, ast.AST]] = []
     stack: List[Tuple[int, ast.AST]] = []
     op_idx = 0
-    next_instruction_idx = 0
+    op_idx = 0
     try:
         for op, arg in read(batched=2):
             opname = dis.opname[op]
             op_idx = offset - 2
 
-            if opname in ("LIST_APPEND", "SET_ADD") and ctx_stack[-1]["kind"] == "condition":
-                # assume we're in a for-loop
-                # We're in a comprehension, and don't do anything with the list_idx
-                # index at this point. We only fake a yield to retrieve it later
-                # when the comprehension is called from the parent function.
-                new_stack = []
-                for node_idx, node in stack:
-                    if node_idx >= ctx_stack[-1]["start"]:
-                        add_instruction(ast.Expr(ast.Yield(value=node)), node_idx)
-                    else:
-                        new_stack.append((node_idx, node))
-                instructions = sorted(instructions, key=lambda x: x[0])
-                #add_instruction(ast.Expr(ast.Yield(value=el_stack.pop()[1])))
-                stack = new_stack
-
-                # Update op to skip processing the LIST_APPEND and SET_ADD
-                [op, arg] = read(2)
-                opname = dis.opname[op]
-                op_idx = offset - 2
+            print("CODE", opname.ljust(20), op_idx, "STACK", [(i, ast.dump(e)[:50]) if isinstance(e, ast.AST) else e for i, e in stack], ctx_stack)
+#            if opname in ("LIST_APPEND", "SET_ADD") and ctx_stack[-1]["kind"] == "condition":
+#                # assume we're in a for-loop
+#                # We're in a comprehension, and don't do anything with the list_idx
+#                # index at this point. We only fake a yield to retrieve it later
+#                # when the comprehension is called from the parent function.
+#                #new_stack = []
+#                #for node_idx, node in stack:
+#                #    if node_idx >= ctx_stack[-1]["start"]:
+#                #        add_instruction(ast.Expr(ast.Yield(value=node)), node_idx)
+#                #    else:
+#                #        new_stack.append((node_idx, node))
+#                #instructions = sorted(instructions, key=lambda x: x[0])
+#                ##add_instruction(ast.Expr(ast.Yield(value=el_stack.pop()[1])))
+#                #stack = new_stack
+##
+#                ## Update op to skip processing the LIST_APPEND and SET_ADD
+#                #[op, arg] = read(2)
+#                #opname = dis.opname[op]
+#                #op_idx = offset - 2
 
             # Argument byte prefixing for too large arguments
             # https://docs.python.org/3.8/library/dis.html#opcode-EXTENDED_ARG
@@ -253,21 +259,18 @@ def build_ast(code: CodeType, as_function=True):
 
             for ctx in ctx_stack[::-1]:
                 if ctx["kind"] == "try":
-                    #print("START EXCEPTS", op_idx, start_excepts, ctx)
                     if op_idx in ctx["start_except"]:
                         ctx["already_popped"] = False
-                        add_stack(EXC)
-                        add_stack(EXC)
-                        add_stack(EXC)
-                        add_stack(EXC)
-                        add_stack(EXC)
-                        add_stack(EXC)
+                        # add_stack(EXC)
+                        # add_stack(EXC)
+                        # add_stack(EXC)
+                        # add_stack(EXC)
+                        # add_stack(EXC)
+                        # add_stack(EXC)
 
             new_ctx_stack = []
             for ctx in ctx_stack[::-1]:
                 if ctx["kind"] == "try" and "end" in ctx and ctx.get("end") <= op_idx:
-                    print("^^^ TRY CTX", ctx)
-                    print("INSTRUCTIONS", [(i, (ast.dump(x) if x is not None else x)) for i, x in instructions])
                     body_block = [
                         inst
                         for idx, inst in instructions
@@ -289,7 +292,6 @@ def build_ast(code: CodeType, as_function=True):
                                 ctx["start_except"][1:] + [ctx.get("start_else", ctx.get("end"))],
                             )
                         ]
-                        print("ELSE/EXCEPT", [ast.dump(x) if isinstance(x, ast.AST) else None for x in else_block], [ast.dump(x) if isinstance(x, ast.AST) else None for e in except_blocks for x in e])
                     else:
                         except_blocks = []
                     if "begin_finally" in ctx:
@@ -317,7 +319,7 @@ def build_ast(code: CodeType, as_function=True):
                             orelse=else_block or None,
                             finalbody=finally_block,
                         )),
-                        ctx["start"],
+                        start=ctx["start"],
                     )
                 elif (
                       ctx["kind"] == "condition"
@@ -326,8 +328,7 @@ def build_ast(code: CodeType, as_function=True):
                             "end" not in ctx and "start_else" in ctx and ctx["start_else"] == op_idx
                       )
                 ):
-                    print("^^^ COND_CTX", "at", op_idx, "ctx:", ctx)
-                    print("INSTRUCTIONS", instructions)
+                    print("DOING CONDITION", op_idx, ctx)
 
                     if ctx["is_for"]:
                         iterator = next(
@@ -336,7 +337,7 @@ def build_ast(code: CodeType, as_function=True):
                         target_idx, target = next(
                             (idx, inst)
                             for idx, inst in instructions
-                            if ctx["start"] < idx
+                            if ctx["start"] + 2 == idx
                         )
                         body_block = [
                             inst
@@ -358,26 +359,54 @@ def build_ast(code: CodeType, as_function=True):
                                 body=body_block,
                                 orelse=else_block or None,
                             )),
-                            ctx["start"],
+                            start=ctx["start"],
                         )
                     else:
                         condition = next(
                             inst for idx, inst in instructions if idx == ctx["start"]
                         )
+                        is_ternary = False
                         body_block = [
                             inst
                             for idx, inst in instructions
                             if ctx["start"] + 1 <= idx < ctx["start_else"]
-                        ] or [ast.Pass()]
+                        ]
+                        if not len(body_block):
+                            stack_block = [
+                                inst
+                                for idx, inst in stack
+                                if ctx["start"] + 1 <= idx < ctx["start_else"]
+                            ]
+                            assert len(stack_block) == 1
+                            is_ternary = True
+                            body_block = stack_block
                         if "end" in ctx:
                             else_block = [
                                 inst
                                 for idx, inst in instructions
                                 if ctx["start_else"] <= idx <= ctx["end"]
                             ]
+
+                            if not len(else_block):
+                                else_stack_block = [
+                                    inst
+                                    for idx, inst in stack
+                                    if ctx["start_else"] <= idx <= ctx["end"]
+                                ]
+                                if len(else_stack_block) == 1:
+                                    is_ternary = True
+                                    else_block = else_stack_block
+                                else:
+                                    else_block = []
                         else:
                             else_block = []
+
+                        if is_ternary:
+                            print("STACK", stack)
+                            stack = [i for i in stack if i[0] < ctx["start"]]
+                            print("STACK AFTER", stack)
                         instructions = [i for i in instructions if i[0] < ctx["start"]]
+
                         if ctx.get("loop"):
                             add_instruction(
                                 postprocess_loop(ast.While(
@@ -385,17 +414,28 @@ def build_ast(code: CodeType, as_function=True):
                                     body=body_block,
                                     orelse=else_block or None,
                                 )),
-                                ctx["start"],
+                                start=ctx["start"],
                             )
-                        else:
+                        elif not is_ternary:
+                            print("AS STANDARD IF")
                             add_instruction(
                                 ast.If(
                                     test=condition,
                                     body=body_block,
                                     orelse=else_block or None,
                                 ),
+                                start=ctx["start"],
+                            )
+                        else:
+                            add_stack(
+                                ast.IfExp(
+                                    test=condition,
+                                    body=body_block,
+                                    orelse=else_block or None,
+                                ),
                                 ctx["start"],
                             )
+                            print("::: AS TERNARY", ast.dump(stack[-1][1]))
                 else:
                     new_ctx_stack.append(ctx)
 
@@ -405,56 +445,66 @@ def build_ast(code: CodeType, as_function=True):
 
             # LOADING
             if opname == "LOAD_FAST":
-                add_stack(ast.Name(code.co_varnames[arg]))
+                add_stack(ast.Name(code.co_varnames[arg]), start=op_idx)
             elif opname == "LOAD_NAME":
-                add_stack(ast.Name(code.co_names[arg]))
+                add_stack(ast.Name(code.co_names[arg]), start=op_idx)
             elif opname == "LOAD_DEREF":
-                add_stack(ast.Name(code.co_freevars[arg]))
+                add_stack(ast.Name(code.co_freevars[arg]), start=op_idx)
 
             # ASSIGNMENTS
             elif opname == "STORE_FAST":
-                if isinstance(stack[-1][1], ast.AugAssign):
-                    add_instruction(stack.pop()[1])
+                idx, value = stack.pop()
+                if isinstance(value, ast.AugAssign):
+                    add_instruction(value, start=idx)
                 else:
                     targets = [ast.Name(code.co_varnames[arg])]
-                    values = [stack.pop()[1]]
+                    values = [value]
                     while dis.opname[bytecode[offset]] == "STORE_FAST":
                         op, arg = read(2)
                         targets.append(ast.Name(code.co_varnames[arg]))
-                        values.append(stack.pop()[1])
+                        idx, value = stack.pop()
+                        values.append(value)
                     add_instruction(ast.Assign(
                         targets=[ast.Tuple(targets) if len(targets) > 1 else targets[0]],
                         value=ast.Tuple(values) if len(targets) > 1 else values[0],
-                    ))
+                    ), start=idx)
             elif opname == "STORE_ATTR":
-                attr = ast.Attribute(value=stack.pop()[1], attr=code.co_names[arg])
-                add_instruction(ast.Assign(targets=[attr], value=stack.pop()[1]))
+                idx, value = stack.pop()
+                attr = ast.Attribute(value=value, attr=code.co_names[arg])
+                add_instruction(ast.Assign(targets=[attr], value=stack.pop()[1]), start=idx)
             elif opname == "STORE_SUBSCR":
-                attr = ast.Subscript(slice=stack.pop()[1], value=stack.pop()[1])
-                add_instruction(ast.Assign(targets=[attr], value=stack.pop()[1]))
-
+                idx, value = stack.pop()
+                attr = ast.Subscript(slice=value, value=stack.pop()[1])
+                add_instruction(ast.Assign(targets=[attr], value=stack.pop()[1]), start=idx)
+            elif opname in ("LIST_APPEND", "SET_ADD") and ctx_stack[-1]["kind"] == "condition":
+                idx, value = stack.pop()
+                add_instruction(ast.Expr(ast.Yield(value)), start=idx)
             # DELETIONS
             elif opname == "DELETE_FAST":
-                add_instruction(ast.Delete([ast.Name(code.co_varnames[arg])]))
+                add_instruction(ast.Delete([ast.Name(code.co_varnames[arg])]), start=op_idx)
             elif opname == "DELETE_ATTR":
-                attr = ast.Attribute(value=stack.pop()[1], attr=code.co_names[arg])
-                add_instruction(ast.Delete([attr]))
+                idx, value = stack.pop()
+                attr = ast.Attribute(value=value, attr=code.co_names[arg])
+                add_instruction(ast.Delete([attr]), start=idx)
             elif opname == "DELETE_SUBSCR":
-                attr = ast.Subscript(slice=stack.pop()[1], value=stack.pop()[1])
-                add_instruction(ast.Delete([attr]))
+                idx, value = stack.pop()
+                attr = ast.Subscript(slice=value, value=stack.pop()[1], start=idx)
+                add_instruction(ast.Delete([attr]), start=idx)
 
             elif opname == "LOAD_GLOBAL":
-                add_stack(ast.Name(code.co_names[arg]))
+                add_stack(ast.Name(code.co_names[arg]), start=op_idx)
             elif opname == "LOAD_CONST":
-                add_stack(ast.Constant(code.co_consts[arg], kind=None))
+                add_stack(ast.Constant(code.co_consts[arg], kind=None), start=op_idx)
 
             # ATTRIBUTES
             elif opname == "LOAD_ATTR":
-                attr = ast.Attribute(value=stack.pop()[1], attr=code.co_names[arg])
-                add_stack(attr)
+                idx, value = stack.pop()
+                attr = ast.Attribute(value=value, attr=code.co_names[arg], start=idx)
+                add_stack(attr, start=idx)
 
             elif opname == "LOAD_METHOD":
-                add_stack(ast.Attribute(value=stack.pop()[1], attr=code.co_names[arg]))
+                idx, value = stack.pop()
+                add_stack(ast.Attribute(value=value, attr=code.co_names[arg]), start=idx)
             elif opname == "UNPACK_SEQUENCE":
                 next_ops = list(read(arg * 2))
                 if all(x == dis.opmap["STORE_FAST"] for x in next_ops[0::2]):
@@ -472,7 +522,8 @@ def build_ast(code: CodeType, as_function=True):
                                 )
                             ],
                             value=stack[-1][1],#stack.pop()[1],
-                        )
+                        ),
+                        start=stack[-1][0],
                     )  # do we pop ?
                 else:
                     raise UnknownException()
@@ -482,9 +533,9 @@ def build_ast(code: CodeType, as_function=True):
                 # the high byte of counts the number of values after it. The resulting
                 # values are put onto the stack right-to-left.
                 before, after = arg & 0xFF, arg >> 8
-                print("BEFORE/AFTER", before, after)
                 next_ops = list(read((before + after + 1) * 2))
                 assert all(x == dis.opmap["STORE_FAST"] for x in next_ops[0::2])
+                idx, value = stack.pop()
                 add_instruction(
                     ast.Assign(
                         targets=[
@@ -497,43 +548,48 @@ def build_ast(code: CodeType, as_function=True):
                                 ]
                             )
                         ],
-                        value=stack.pop()[1],
-                    )
+                        value=value,
+                    ),
+                    start=idx,
                 )
 
 
 
             # BUILD COLLECTIONS
             elif opname == "BUILD_TUPLE":
-                args = [stack.pop()[1] for _ in range(arg)][::-1]
-                add_stack(ast.Tuple(args))
+                indices, args = unzip_stack(arg)
+                print("INDICES", indices, "ARGS", args)
+                add_stack(ast.Tuple(args), start=indices[0] if indices else op_idx)
             elif opname == "BUILD_LIST":
-                args = [stack.pop()[1] for _ in range(arg)][::-1]
-                add_stack(ast.List(args))
+                indices, args = unzip_stack(arg)
+                add_stack(ast.List(args), start=indices[0] if indices else op_idx)
             elif opname == "BUILD_SET":
-                args = [stack.pop()[1] for _ in range(arg)][::-1]
-                add_stack(ast.Set(args) if len(args) >= 1 else ast.Call(func=ast.Name("set"), args=args, keywords=[]))
+                indices, args = unzip_stack(arg)
+                add_stack(ast.Set(args) if len(args) >= 1 else
+                          ast.Call(func=ast.Name("set"), args=args, keywords=[]),
+                          start=indices[0] if indices else op_idx)
             elif opname == "BUILD_MAP":
-                args = [stack.pop()[1] for _ in range(arg*2)][::-1]
-                add_stack(ast.Dict(args[::2], args[1::2]))
+                indices, args = unzip_stack(arg*2)
+                add_stack(ast.Dict(args[::2], args[1::2]), start=indices[0] if indices else op_idx)
             elif opname == "BUILD_CONST_KEY_MAP":
                 keys = [ast.Constant(key, kind=None) for key in stack.pop()[1].value]
-                values = [stack.pop()[1] for _ in range(arg)][::-1]
-                add_stack(ast.Dict(keys, values))
+                indices, values = unzip_stack(arg)
+                add_stack(ast.Dict(keys, values), start=indices[0] if indices else op_idx)
             elif opname in ("BUILD_TUPLE_UNPACK", "BUILD_TUPLE_UNPACK_WITH_CALL"):
-                args = [stack.pop()[1] for _ in range(arg)][::-1]
+                indices, args = unzip_stack(arg)
                 items = extract_items(args)
-                add_stack(ast.Tuple(items))
+                add_stack(ast.Tuple(items), start=indices[0] if indices else op_idx)
             elif opname == "BUILD_LIST_UNPACK":
-                args = [stack.pop()[1] for _ in range(arg)][::-1]
+                indices, args = unzip_stack(arg)
                 items = extract_items(args)
-                add_stack(ast.List(items))
+                add_stack(ast.List(items), start=indices[0] if indices else op_idx)
             elif opname == "BUILD_SET_UNPACK":
-                args = [stack.pop()[1] for _ in range(arg)][::-1]
+                indices, args = unzip_stack(arg)
                 items = extract_items(args)
-                add_stack(ast.Set(items))
+                add_stack(ast.Set(items), start=indices[0] if indices else op_idx)
             elif opname in ("BUILD_MAP_UNPACK", "BUILD_MAP_UNPACK_WITH_CALL"):
-                args = [stack.pop()[1] for _ in range(arg)][::-1]
+                indices, args = unzip_stack(arg)
+                print("UNPACK DICT", args)
                 keys, values = zip(*(
                     (k, v)
                     for x in args
@@ -542,33 +598,37 @@ def build_ast(code: CodeType, as_function=True):
                         zip(x.value.keys(), x.value.values()) if isinstance(x, ast.Constant) else
                         ((None, x,),))
                 ))
-                add_stack(ast.Dict(keys, values))
+                add_stack(ast.Dict(keys, values), start=indices[0] if indices else op_idx)
             # INPLACE/BINARY OPERATIONS
             elif op in binop_to_ast:
                 right = stack.pop()[1]
-                left = stack.pop()[1]
-                add_stack(ast.BinOp(left=left, op=binop_to_ast[op], right=right))
+                idx, left = stack.pop()
+                add_stack(
+                    ast.BinOp(left=left, op=binop_to_ast[op], right=right),
+                    start=idx,
+                )
             elif op in inplace_to_ast:
                 right = stack.pop()[1]
-                left = stack.pop()[1]
+                idx, left = stack.pop()
                 add_stack(
-                    ast.AugAssign(target=left, op=inplace_to_ast[op], value=right)
+                    ast.AugAssign(target=left, op=inplace_to_ast[op], value=right),
+                    start=idx,
                 )
             elif opname == "BINARY_SUBSCR":
                 slice = stack.pop()[1]
-                value = stack.pop()[1]
-                add_stack(
-                    ast.Subscript(value, slice)
-                )
+                idx, value = stack.pop()
+                add_stack(ast.Subscript(value, slice), start=idx)
             elif op in unaryop_to_ast:
-                add_stack(ast.UnaryOp(op=unaryop_to_ast[op], operand=stack.pop()[1]))
+                idx, value = stack.pop()
+                add_stack(ast.UnaryOp(op=unaryop_to_ast[op], operand=value), start=idx)
 
             # FUNCTIONS
             elif opname == "RETURN_VALUE":
-                add_instruction(ast.Return(value=stack.pop()[1]))
+                idx, value = stack.pop()
+                add_instruction(ast.Return(value=value), start=idx)
             elif opname == "CALL_FUNCTION" or opname == "CALL_METHOD":
                 args = [stack.pop()[1] for _ in range(arg)][::-1]
-                func = stack.pop()[1]
+                idx, func = stack.pop()
                 if isinstance(func, ast.FunctionDef):
                     class RewriteComprehensionArgs(ast.NodeTransformer):
                         def visit_Name(self, node):
@@ -615,7 +675,6 @@ def build_ast(code: CodeType, as_function=True):
                             #if not isinstance(elt, ast.IfExp):
                             #    raise Exception("Expected IfExp instead of " + ast.dump(elt))
                             # TODO handle DictComp
-                            #print(ast.dump(elt))
                             if isinstance(elt, cls):
                                 elt.generators = [generator] + elt.generators
                             else:
@@ -653,20 +712,21 @@ def build_ast(code: CodeType, as_function=True):
 
                     if len(func.body) == 1 or isinstance(func.body[1], ast.Return):
                         tree = func.body[0]
-                    add_stack(tree)
+                    add_stack(tree, start=idx)
                 else:
                     add_stack(
                         ast.Call(
                             func=func,
                             args=args,
                             keywords=[],
-                        )
+                        ),
+                        start=idx,
                     )
             elif opname == "CALL_FUNCTION_KW":
                 keys = stack.pop()[1].value
                 values = [stack.pop()[1] for _ in range(len(keys))][::-1]
                 args = [stack.pop()[1] for _ in range(arg - len(keys))][::-1]
-                func = stack.pop()[1]
+                idx, func = stack.pop()
                 add_stack(
                     ast.Call(
                         func=func,
@@ -675,7 +735,7 @@ def build_ast(code: CodeType, as_function=True):
                             ast.keyword(arg=key, value=value)
                             for key, value in zip(keys, values)
                         ],
-                    )
+                    ), start=idx,
                 )
             elif opname == "CALL_FUNCTION_EX":
                 if arg & 0x01:
@@ -684,7 +744,7 @@ def build_ast(code: CodeType, as_function=True):
                 else:
                     kwargs = None
                     args = stack.pop()[1]
-                func = stack.pop()[1]
+                idx, func = stack.pop()
                 if isinstance(kwargs, ast.Dict):
                     kwargs = [
                         ast.keyword(arg=key.value if key is not None else None, value=value)
@@ -692,21 +752,14 @@ def build_ast(code: CodeType, as_function=True):
                     ] if kwargs is not None else []
                 else:
                     kwargs = [ast.keyword(arg=None, value=kwargs)]
-                add_stack(
-                    ast.Call(
-                        func=func,
-                        args=args.elts,
-                        keywords=kwargs,
-                    )
-                )
+                add_stack(ast.Call(func=func, args=args.elts, keywords=kwargs,), start=idx)
 
             # Control structures
             elif opname == "SETUP_FINALLY":
                 ctx_stack.append(
                     {
-                        "start": next_instruction_idx,
+                        "start": op_idx,
                         "end_body": op_idx + arg + 2,
-                        "end_except": [],
                         "start_except": [],
                         "except_types": {},
                         "kind": "try",
@@ -719,45 +772,56 @@ def build_ast(code: CodeType, as_function=True):
                 #    ctx_stack[-1]["begin_finally"] = op_idx + arg
             elif opname == "POP_BLOCK":
                 pass
+            elif opname == "POP_TOP":
+                # TODO should we check if we're in a loop ?
+                if offset < len(bytecode) and dis.opname[bytecode[offset]] == "JUMP_ABSOLUTE":
+                    [_, jump_to] = read(2)
+                    if any(ctx["start"] == jump_to for ctx in ctx_stack):
+                        # This is a break
+                        add_instruction(ast.Break(), start=op_idx)
+                    # elif ctx_stack[-1]["start"] == jump_to:
+                    #     # This is a continue
+                    #     add_instruction(ast.Continue())
+                    elif any(ctx["start_else"] == jump_to for ctx in ctx_stack):
+                        # This is a break
+                        add_instruction(ast.Break(), start=op_idx)
+                    else:
+                        raise UnknownException()
+                # is this the correct way to handle this?
+                else:
+                    # Maybe this is one of those cases where pop_top occurs at the end
+                    # after the return and is therefore never called ?
+                    if len(stack) > 0:
+                        top = stack.pop()[1]
+                        # if top is not None and top is not EXC and not isinstance(top, ast.Constant):
+                        add_instruction(ast.Expr(top), start=op_idx)
+
                 # ctx_stack[-1]["end_body"] = next_instruction_idx
             elif opname == "POP_EXCEPT":
-                # TODO we should pop extraneous elements from the stack ?
-                #while len(stack) and stack[-1][1] is EXC:
-                #    stack.pop()
-                ctx = ctx_stack[-1]
-                assert ctx["kind"] == "try"
-                if not ctx["already_popped"]:
-                    stack.pop()
-                    stack.pop()
-                    stack.pop()
-                    ctx["already_popped"] = True
+                pass
             elif opname == "POP_FINALLY":
-                print("STACK", stack)
-                if arg: # preserve_tos
-                    tos = stack.pop()
-                # TODO we should pop extraneous elements from the stack ?
-                if stack and stack[-1][1] is EXC:
-                    stack.pop()
-                elif isinstance(stack[-1][1], ast.Name):
-                    exc_names = (pair[0].id for pair in ctx["except_types"].values())
-                    print("EXC NAMES", exc_names)
-                    # We check if the exception is an exception
-                    if stack[-1][1].id in exc_names:
-                        for _ in range(6):
-                            stack.pop()
-                if arg:
-                    stack.append(tos)
-                #ctx_stack[-1]["end_except"].append(next_instruction_idx)
+                pass
+                #if arg: # preserve_tos
+                #    tos = stack.pop()
+                ## TODO we should pop extraneous elements from the stack ?
+                ##if stack and stack[-1][1] is EXC:
+                ##    stack.pop()
+                #elif isinstance(stack[-1][1], ast.Name):
+                #    exc_names = (pair[0].id for pair in ctx["except_types"].values())
+                #    # We check if the exception is an exception
+                #    if stack[-1][1].id in exc_names:
+                #        for _ in range(6):
+                #            stack.pop()
+                #if arg:
+                #    stack.append(tos)
             # JUMPS
             elif opname == "JUMP_FORWARD":
-                #print("JUMP_FORWARD:", op_idx, op_idx + delta, ctx_stack)
                 # try/except without Exception type
                 assert ctx_stack[-1]["kind"] in ("try", "condition")
                 if ctx_stack[-1]["kind"] == "try":
                     if ctx_stack[-1]["start_except"] and op_idx > ctx_stack[-1]["start_except"][0]:
                         ctx_stack[-1]["end"] = op_idx + arg + 2
                     else:
-                    #    print("JUMP_FORWARD", op_idx + delta + 4, dis.opname[bytecode[op_idx + delta + 4]])
                     #    #if bytecode[op_idx + delta + 4] != dis.opmap["BEGIN_FINALLY"]:
                     #        # Fake push Exception and compare_op result on stack
                     #    add_stack(None)
@@ -766,12 +830,17 @@ def build_ast(code: CodeType, as_function=True):
                         ctx_stack[-1]["start_else"] = op_idx + arg
                 elif ctx_stack[-1]["kind"] == "condition":
                     ctx_stack[-1]["end"] = op_idx + arg + 2
-                next_instruction_idx = offset
+                if (
+                      len(bytecode[offset:]) >= 6 and
+                        dis.opname[bytecode[offset]] == "POP_TOP" and
+                        dis.opname[bytecode[offset + 2]] == "POP_TOP" and
+                        dis.opname[bytecode[offset + 4]] == "POP_TOP"):
+                    [*_] = read(6)
+                # next_instruction_idx = offset
             elif opname in ("POP_JUMP_IF_FALSE", "POP_JUMP_IF_TRUE"):
-                test_node = stack.pop()[1]
+                idx, test_node = stack.pop()
                 if opname == "POP_JUMP_IF_TRUE":
                     test_node = ast.UnaryOp(op=ast.Not(), operand=test_node)
-                #print("IS COMPARE", isinstance(test_node, ast.Compare))
                 if (
                       isinstance(test_node, ast.Compare)
                       and test_node.ops[0] == "exception match"
@@ -806,46 +875,52 @@ def build_ast(code: CodeType, as_function=True):
                         else:
                             raise UnknownException()
                     # TODO: check if we should really pop
-                    start = next_instruction_idx
-                    add_instruction(test_node)
+                    add_instruction(test_node, start=idx)
                     ctx_stack.append(
                         {
                             "kind": "condition",
-                            "start": start,
+                            "start": idx,
                             "start_else": start_else,
                             "is_for": False,
                         }
                 )
             elif opname == "JUMP_ABSOLUTE":
-                #print("JUMP_ABSOLUTE", op_idx, jump_to, ctx_stack)
-
                 if len(ctx_stack) and ctx_stack[-1]["kind"] == "condition" and ctx_stack[-1]["start_else"] == arg:
                     # If we jump at the else block / after the body block, this is a
                     # break.
                     # TODO: should we check if this is a loop ?
 
-                    add_instruction(ast.Break())
-                elif any(ctx["start"] == arg for ctx in ctx_stack):
+                    add_instruction(ast.Break(), start=op_idx)
+                elif any(ctx["start"] == arg for ctx in ctx_stack if ctx["kind"] == "condition"):
                     # If we jump back to the start of a block, this is
                     # an indication that the upper block is a loop.
                     ctx = None
                     for ctx in ctx_stack[::-1]:
-                        if ctx["start"] == arg:
+                        if ctx["kind"] == "condition" and ctx["start"] == arg:
                             ctx["loop"] = True
                             # TEST IF WE'RE ABOUT TO END A LOOP
                             # THEN, WE DON'T NEED TO CONTINUE
-                            if not (ctx["start_else"] == offset):
-                                add_instruction(ast.Continue())
+                            if not ("start_else" in ctx and ctx["start_else"] == offset):
+                                add_instruction(ast.Continue(), start=op_idx)
                             break
                 # elif jump_to < op_idx:
-                #     print("> C", jump_to, op_idx)
                 #     # We're in a top-level loop
                 #     for ctx in ctx_stack:
                 #         if ctx["start"] == jump_to:
                 #             ctx["loop"] = True
                 else:
+
+                    # ctx_stack.append(
+                    #     {
+                    #         "kind": "condition",
+                    #         "start": arg,
+                    #         "start_else": None,
+                    #         "is_for": False,
+                    #         "loop": True,
+                    #     })
+                    # ctx_stack = sorted(ctx_stack, key=lambda ctx: ctx["start"])
+                    # print("ERROR", [(ctx["start"], arg, ctx["kind"]) for ctx in ctx_stack])
                     raise UnknownException()
-                    #print("> D", jump_to, op_idx)
                     # We're in a nested loop
                     # is_break = any(
                     #     ctx["start_else"] == jump_to for ctx in ctx_stack[::-1]
@@ -854,65 +929,40 @@ def build_ast(code: CodeType, as_function=True):
                     #     add_instruction(ast.Break())
                     # else:
                     #     raise UnknownException()
-                #print("======>", op_idx, jump_to, ctx_stack)
             elif opname == "COMPARE_OP":
                 if compareop_to_ast[arg] != "exception match":
                     right = stack.pop()[1]
-                    left = stack.pop()[1]
+                    left_idx, left = stack.pop()
                 else:
-                    left = stack.pop()[1]
-                    right = stack.pop()[1]
-                    #right = None
+                    left_idx, left = stack.pop()
+                    #right = stack.pop()[1]
+                    right = None
                 add_stack(
                     ast.Compare(
                         left=left,
                         ops=[compareop_to_ast[arg]],
                         comparators=[right],
-                    )
+                    ),
+                    start=left_idx,
                 )
             elif opname == "END_FINALLY":
                 if len(ctx_stack) and ctx_stack[-1]["kind"] == "try" and "end" not in ctx_stack[-1]:
-                    ctx_stack[-1]["end"] = next_instruction_idx
+                    ctx_stack[-1]["end"] = op_idx
                 # End of block => reset instruction
-                next_instruction_idx = offset + 1
+                #next_instruction_idx = offset + 1
             elif opname == "CALL_FINALLY":
                 ctx_stack[-1]["begin_finally"] = op_idx + arg + 2
+                if bytecode[offset] == dis.opmap["POP_TOP"]:
+                    [*_] = read(2)
             elif opname == "DUP_TOP":
-                add_stack(stack[-1][1])
+                pass
             elif opname == "BEGIN_FINALLY":
-                next_instruction_idx = offset + 1
+                #next_instruction_idx = offset + 1
                 ctx_stack[-1]["begin_finally"] = op_idx
                 # end will be set by END_FINALLY
                 if "end" in ctx_stack[-1]:
                     del ctx_stack[-1]["end"]
-                add_stack(EXC)
-
-            elif opname == "POP_TOP":
-                # TODO should we check if we're in a loop ?
-                if offset < len(bytecode) and dis.opname[bytecode[offset]] == "JUMP_ABSOLUTE":
-                    [_, jump_to] = read(2)
-                    if any(ctx["start"] == jump_to for ctx in ctx_stack):
-                        # This is a break
-                        print("THIS BREAK BECAUSE GO BACK TO TEST OF UPPER LOOP")
-                        add_instruction(ast.Break())
-                    # elif ctx_stack[-1]["start"] == jump_to:
-                    #     # This is a continue
-                    #     print("THIS CONTINUE BECAUSE GO BACK TO START OF CURRENT LOOP")
-                    #     add_instruction(ast.Continue())
-                    elif any(ctx["start_else"] == jump_to for ctx in ctx_stack):
-                        # This is a break
-                        print("THIS BREAK BECAUSE GO BACK TO END OF CURRENT LOOP")
-                        add_instruction(ast.Break())
-                    else:
-                        raise UnknownException()
-                # is this the correct way to handle this?
-                else:
-                    # Maybe this is one of those cases where pop_top occurs at the end
-                    # after the return and is therefore never called ?
-                    if len(stack) > 0:
-                        top = stack.pop()[1]
-                        if top is not None and top is not EXC and not isinstance(top, ast.Constant):
-                            add_instruction(ast.Expr(top))
+                #add_stack(EXC)
 
             elif opname.startswith("<"):
                 pass
@@ -923,13 +973,12 @@ def build_ast(code: CodeType, as_function=True):
                 #stack.pop()
                 #add_stack(None)
             elif opname == "FOR_ITER":
-                next_instruction_idx = op_idx
-                start = next_instruction_idx
+                #next_instruction_idx = op_idx
+                start = op_idx
                 #[_, next_op] = read(2)
-                #print("FOR_ITER", op_idx, ctx_stack)
                 #if next_op == dis.opmap["FOR_ITER"]:
-                add_instruction(stack[-1][1])
-                add_stack(None)
+                add_instruction(stack[-1][1], start=start)
+                add_stack(None, start + 2)
 #                names = []
 #                if bytecode[offset] == dis.opmap["UNPACK_SEQUENCE"]:
 #                    [_, arg] = read(1)
@@ -954,32 +1003,29 @@ def build_ast(code: CodeType, as_function=True):
                         "is_for": True,
                     }
                 )
-                #print("=>", next_instruction_idx)
             elif opname == "MAKE_FUNCTION":
                 if arg == 0:
                     func_code: ast.Constant = stack[-2][1]
                     assert isinstance(func_code, ast.Constant)
                     [sub_function_ast] = build_ast(func_code.value, as_function=True)
-                    add_stack(sub_function_ast)
+                    add_stack(sub_function_ast, op_idx)
                     try:
-                        print("UNPARSE SUB", astunparse.unparse([sub_function_ast]))
+                        print("SUB FUNCTION AST", astunparse.unparse(sub_function_ast))
                     except:
                         raise Exception(ast.dump(sub_function_ast))
                 else:
                     raise UnknownException()
             elif opname in "MAP_ADD" and ctx_stack[-1]["kind"] == "condition":
-                #print("CTX", ctx_stack[-1])
                 # assume we're in a for-loop
                 # We're in a comprehension, and don't do anything with the list_idx
                 # index at this point. We only fake a yield to retrieve it later
                 # when the comprehension is called from the parent function.
                 stack, pairs = split_stack(stack, ctx_stack[-1]["start"])
                 for (key_idx, key), (value_idx, value) in zip(pairs[-2::-2], pairs[-1::-2]):
-                    add_instruction(ast.Expr(ast.Yield(value=ast.Tuple([key, value]))), key_idx)
+                    add_instruction(ast.Expr(ast.Yield(value=ast.Tuple([key, value]))), start=key_idx)
                 #for (key_idx, key), (value_idx, value) in zip(stack[-2::-2], stack[::-2]):
                 #    if key_idx >= ctx_stack[-1]["start"]:
                 #        add_instruction(ast.Expr(ast.Yield(value=ast.Tuple([key, value]))), key_idx)
-                #        print("INST", ast.dump(instructions[-1][1]))
                 #    else:
                 #        new_stack.append((value_idx, value))
                 #        new_stack.append((key_idx, key))
@@ -1000,37 +1046,51 @@ def build_ast(code: CodeType, as_function=True):
                     fmt_spec = stack.pop()[1]
                     if not isinstance(fmt_spec, ast.JoinedStr):
                         fmt_spec = ast.JoinedStr([fmt_spec])
+                idx, value = stack.pop()
                 add_stack(ast.JoinedStr([ast.FormattedValue(
-                    value=stack.pop()[1],
+                    value=value,
                     conversion=conversion,
                     format_spec=fmt_spec,
-                )]))
+                )]), start=idx)
             elif opname == "BUILD_STRING":
-                values = [stack.pop()[1] for _ in range(arg)][::-1]
+                indices, values = unzip_stack(arg)
                 values = [
                     part
                     for v in values
                     for part in (v.values if isinstance(v, ast.JoinedStr) else [v])
                 ]
-                add_stack(ast.JoinedStr(values=values))
+                add_stack(ast.JoinedStr(values=values), start=indices[0] if indices else op_idx)
             elif opname == "BUILD_SLICE":
-                values = [stack.pop()[1] for _ in range(arg)][::-1]
-                add_stack(ast.Slice(*values))
+                indices, values = unzip_stack(arg)
+                add_stack(ast.Slice(*values), start=indices[0] if indices else op_idx)
             elif opname == "ROT_TWO":
-                s = stack
-                s[-1], s[-2] = s[-2], s[-1]
+                if dis.opname[bytecode[offset]] in ("POP_EXCEPT", "POP_BLOCK", "POP_TOP"):
+                    # skip this instruction
+                    [*_] = read(2)
+                else:
+                    s = stack
+                    s[-1], s[-2] = s[-2], s[-1]
             elif opname == "ROT_THREE":
-                s = stack
-                s[-1], s[-2], s[-3] = s[-2], s[-3], s[-1]
+                if dis.opname[bytecode[offset]] in ("POP_EXCEPT", "POP_BLOCK", "POP_TOP"):
+                    # skip this instruction
+                    [*_] = read(2)
+                else:
+                    s = stack
+                    s[-1], s[-2], s[-3] = s[-2], s[-3], s[-1]
             elif opname == "ROT_FOUR":
-                s = stack
-                s[-1], s[-2], s[-3], s[-4] = s[-2], s[-3], s[-4], s[-1]
+
+                if dis.opname[bytecode[offset]] in ("POP_EXCEPT", "POP_BLOCK", "POP_TOP"):
+                    # skip this instruction
+                    [*_] = read(2)
+
+                else:
+                    s = stack
+                    s[-1], s[-2], s[-3], s[-4] = s[-2], s[-3], s[-4], s[-1]
             else:
                 raise UnknownException()
 
-
-            print("INST", opname.ljust(20), op_idx, "STACK", [ast.dump(e)[:50] if isinstance(e, ast.AST) else e for i, e in stack], ctx_stack[-1].get("start_except") if ctx_stack else None)
             #print("CTX", ctx_stack)
+
     except:
         raise UnknownException()
 
@@ -1054,7 +1114,6 @@ def build_ast(code: CodeType, as_function=True):
         )
         instructions = [(0, func_def)]  # type: ignore
 
-    #print("FINAL STACK", [(i, ast.dump(el) if isinstance(el, ast.AST) else el) for i, el in stack])
     return [node for i, node in instructions]
 
 def decompile(code: CodeType, as_function: bool = False) -> str:
