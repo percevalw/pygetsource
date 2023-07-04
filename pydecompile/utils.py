@@ -8,9 +8,9 @@ from typing import List, Set, TypeVar, Dict
 try:
     # Try/except to skip circular import errors
     # but benefit from type checking
-    from .graph2 import Node
+    from .decompiler import Node
 except ImportError:
-    pass
+    Node = TypeVar("Node")
 
 binop_to_ast = {
     dis.opmap["BINARY_MATRIX_MULTIPLY"]: ast.MatMult(),
@@ -106,18 +106,20 @@ def graph_sort(graph):
 
 
 
-def get_origin_offset(tree: ast.AST):
+def get_origin(tree: ast.AST):
     offset = None
+    origin = None
     for node in ast.walk(tree):
         try:
-            offset = (
-                min(offset, node._origin_offset)
-                if offset is not None
-                else node._origin_offset
-            )
+            if offset is None:
+                offset = node._origin_offset
+                origin = node._origin_node
+            elif node._origin_offset < offset:
+                offset = node._origin_offset
+                origin = node._origin_node
         except AttributeError:
             pass
-    return offset
+    return origin, offset
 
 
 
