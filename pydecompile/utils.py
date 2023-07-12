@@ -2,9 +2,9 @@ import ast
 import dis
 import functools
 import sys
-import textwrap
 from collections import deque
-from typing import List, Set, TypeVar, Dict
+from typing import List, Set, TypeVar
+
 try:
     # Try/except to skip circular import errors
     # but benefit from type checking
@@ -13,42 +13,42 @@ except ImportError:
     Node = TypeVar("Node")
 
 binop_to_ast = {
-    dis.opmap["BINARY_MATRIX_MULTIPLY"]: ast.MatMult(),
-    dis.opmap["BINARY_POWER"]: ast.Pow(),
-    dis.opmap["BINARY_MULTIPLY"]: ast.Mult(),
-    dis.opmap["BINARY_MODULO"]: ast.Mod(),
-    dis.opmap["BINARY_ADD"]: ast.Add(),
-    dis.opmap["BINARY_SUBTRACT"]: ast.Sub(),
-    dis.opmap["BINARY_FLOOR_DIVIDE"]: ast.FloorDiv(),
-    dis.opmap["BINARY_TRUE_DIVIDE"]: ast.Div(),
-    dis.opmap["BINARY_LSHIFT"]: ast.LShift(),
-    dis.opmap["BINARY_RSHIFT"]: ast.RShift(),
-    dis.opmap["BINARY_AND"]: ast.BitAnd(),
-    dis.opmap["BINARY_XOR"]: ast.BitXor(),
-    dis.opmap["BINARY_OR"]: ast.BitOr(),
+    "BINARY_MATRIX_MULTIPLY": ast.MatMult(),
+    "BINARY_POWER": ast.Pow(),
+    "BINARY_MULTIPLY": ast.Mult(),
+    "BINARY_MODULO": ast.Mod(),
+    "BINARY_ADD": ast.Add(),
+    "BINARY_SUBTRACT": ast.Sub(),
+    "BINARY_FLOOR_DIVIDE": ast.FloorDiv(),
+    "BINARY_TRUE_DIVIDE": ast.Div(),
+    "BINARY_LSHIFT": ast.LShift(),
+    "BINARY_RSHIFT": ast.RShift(),
+    "BINARY_AND": ast.BitAnd(),
+    "BINARY_XOR": ast.BitXor(),
+    "BINARY_OR": ast.BitOr(),
 }
 
 unaryop_to_ast = {
-    dis.opmap["UNARY_POSITIVE"]: ast.UAdd(),
-    dis.opmap["UNARY_NEGATIVE"]: ast.USub(),
-    dis.opmap["UNARY_NOT"]: ast.Not(),
-    dis.opmap["UNARY_INVERT"]: ast.Invert(),
+    "UNARY_POSITIVE": ast.UAdd(),
+    "UNARY_NEGATIVE": ast.USub(),
+    "UNARY_NOT": ast.Not(),
+    "UNARY_INVERT": ast.Invert(),
 }
 
 inplace_to_ast = {
-    dis.opmap["INPLACE_MATRIX_MULTIPLY"]: ast.MatMult(),
-    dis.opmap["INPLACE_FLOOR_DIVIDE"]: ast.FloorDiv(),
-    dis.opmap["INPLACE_TRUE_DIVIDE"]: ast.Div(),
-    dis.opmap["INPLACE_ADD"]: ast.Add(),
-    dis.opmap["INPLACE_SUBTRACT"]: ast.Sub(),
-    dis.opmap["INPLACE_MULTIPLY"]: ast.Mult(),
-    dis.opmap["INPLACE_MODULO"]: ast.Mod(),
-    dis.opmap["INPLACE_POWER"]: ast.Pow(),
-    dis.opmap["INPLACE_LSHIFT"]: ast.LShift(),
-    dis.opmap["INPLACE_RSHIFT"]: ast.RShift(),
-    dis.opmap["INPLACE_AND"]: ast.BitAnd(),
-    dis.opmap["INPLACE_XOR"]: ast.BitXor(),
-    dis.opmap["INPLACE_OR"]: ast.BitOr(),
+    "INPLACE_MATRIX_MULTIPLY": ast.MatMult(),
+    "INPLACE_FLOOR_DIVIDE": ast.FloorDiv(),
+    "INPLACE_TRUE_DIVIDE": ast.Div(),
+    "INPLACE_ADD": ast.Add(),
+    "INPLACE_SUBTRACT": ast.Sub(),
+    "INPLACE_MULTIPLY": ast.Mult(),
+    "INPLACE_MODULO": ast.Mod(),
+    "INPLACE_POWER": ast.Pow(),
+    "INPLACE_LSHIFT": ast.LShift(),
+    "INPLACE_RSHIFT": ast.RShift(),
+    "INPLACE_AND": ast.BitAnd(),
+    "INPLACE_XOR": ast.BitXor(),
+    "INPLACE_OR": ast.BitOr(),
 }
 
 cmp_map = {op: i for i, op in enumerate(dis.cmp_op)}
@@ -68,7 +68,7 @@ if sys.version_info < (3, 9):
     compareop_to_ast[cmp_map["is"]] = ast.Is()
     compareop_to_ast[cmp_map["is not"]] = ast.IsNot()
 
-hasjabs = ["JUMP_ABSOLUTE", "FOR_ITER", "POP_JUMP_IF_FALSE", "POP_JUMP_IF_TRUE", "JUMP_FORWARD"]
+hasjabs = ["JUMP_ABSOLUTE", "FOR_ITER", "POP_JUMP_IF_FALSE", "POP_JUMP_IF_TRUE", "JUMP_FORWARD", "JUMP_IF_FALSE_OR_POP", "JUMP_IF_TRUE_OR_POP", "JUMP_IF_NOT_EXC_MATCH", "SETUP_FINALLY"]
 
 
 
@@ -106,20 +106,23 @@ def graph_sort(graph):
 
 
 
-def get_origin(tree: ast.AST):
+def get_origin(trees: ast.AST):
     offset = None
     origin = None
-    for node in ast.walk(tree):
-        try:
-            if offset is None:
-                offset = node._origin_offset
-                origin = node._origin_node
-            elif node._origin_offset < offset:
-                offset = node._origin_offset
-                origin = node._origin_node
-        except AttributeError:
-            pass
-    return origin, offset
+    if isinstance(trees, ast.AST):
+        trees = [trees]
+    for tree in trees:
+        for node in ast.walk(tree):
+            try:
+                if offset is None:
+                    offset = node._origin_offset
+                    origin = node._origin_node
+                elif node._origin_offset < offset:
+                    offset = node._origin_offset
+                    origin = node._origin_node
+            except AttributeError:
+                pass
+        return origin, offset
 
 
 
@@ -144,41 +147,3 @@ def lowest_common_successor(*starts, stop_nodes=None):
         if common_nodes:
             return common_nodes
     return set()
-
-
-def detect_loops(root: Node):
-    """
-    Detects all loops in the graph, label them and assign them to the
-    `loops` attribute of each node.
-
-    Parameters
-    ----------
-    root: Node
-        The root of the graph
-    """
-
-    loop_count = 0
-    def explore(node: Node, label: int, ancestors: List[Node], stop_nodes: Set[Node] = set()):
-        nonlocal loop_count
-
-        if node in stop_nodes:
-            for ancestor in ancestors:
-                ancestor.loops = {*ancestor.loops, label}
-            return
-
-        if node in ancestors:
-            index = ancestors.index(node)
-            for ancestor in ancestors[index:]:
-                ancestor.loops = {*ancestor.loops, label}
-            return
-        if node.opname == "FOR_ITER" and node.next not in stop_nodes:
-            lca = lowest_common_successor(node.next, next(iter(node.jumps)), stop_nodes={node})
-            loop_count += 1
-            explore(node.next, loop_count, [node], {*stop_nodes, *lca})
-        if node.next:
-            explore(node.next, label, ancestors + [node], stop_nodes)
-        for jump in node.jumps:
-            loop_count += 1
-            explore(jump, loop_count, ancestors + [node], stop_nodes)
-
-    explore(root, loop_count, [])

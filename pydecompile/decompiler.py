@@ -1,7 +1,7 @@
 import dis
 import io
 import sys
-from typing import List, Optional, Set, Tuple
+from typing import List, Optional, Set, Tuple, Type
 import ast
 import textwrap
 
@@ -11,7 +11,7 @@ from .utils import (
     hasjabs,
     graph_sort,
     get_origin,
-    lowest_common_successor, detect_loops,
+    lowest_common_successor, compareop_to_ast, binop_to_ast, inplace_to_ast, unaryop_to_ast,
 )
 
 try:
@@ -24,7 +24,23 @@ except AssertionError:
 from types import CodeType
 
 INDENT = 0
-DEBUG = True
+DEBUG = False
+DRAW_PROG = "dot"
+
+
+class set_debug:
+    def __init__(self, value=True, prog="dot"):
+        global DEBUG, DRAW_PROG
+        self.old = (DEBUG, DRAW_PROG)
+        DEBUG = value
+        DRAW_PROG = prog
+
+    def __enter__(self):
+        pass
+
+    def __exit__(self, *args):
+        global DEBUG, DRAW_PROG
+        DEBUG, DRAW_PROG = self.old
 
 
 def debug(*args, **kwargs):
@@ -46,8 +62,36 @@ class Unpacking(ast.AST):
         self.counter = counter
         self.starred = starred
 
-    def __repr__(self):
-        return f"Unpacking({self.value}, {self.counter}, starred={self.starred})"
+
+class ForTargetPlaceholder(ast.AST):
+    _attributes = ()
+    _fields = ()
+
+class ExceptionMatch(ast.AST):
+    _attributes = ()
+    _fields = ("value",)
+
+    def __init__(self, value):
+        self.value = value
+
+
+class ExceptionPlaceholder(ast.AST):
+    _attributes = ()
+    _fields = ()
+
+
+class Reraise(ast.AST):
+    _attributes = ()
+    _fields = ()
+
+class ComprehensionBody(ast.AST):
+    _attributes = ()
+    _fields = ("value", "collection")
+
+    def __init__(self, value, collection):
+        self.collection = collection
+        self.value = value
+
 
 
 class Node:
@@ -68,13 +112,21 @@ class Node:
         self.offset = offset
 
         self.stmts: List[ast.AST] = []
-        self.stack: List[ast.AST] = []
+        self.stack: List[ast.AST] = None
 
         # The node's position in the topological sort
         self.index: int = -1
         self.visited: bool = False
         self.loops = set()
         self.is_conditional_while = False
+        self.jump_test = None
+        self._container = self
+
+    @property
+    def container(self):
+        if self._container is not self:
+            self._container = self._container.container
+        return self._container
 
     def add_stmt(self, stmt):
         debug("Add stmt", self, ":", stmt)
@@ -84,6 +136,8 @@ class Node:
         self.stmts.append(stmt)
 
     def add_stack(self, item):
+        if self.stack is None:
+            self.stack = []
         debug("Add stack", self, ":", item)
         self.stack.append(item)
 
@@ -104,11 +158,15 @@ class Node:
             prev_node
             and (
                 (len(self.prev) == 1 and not prev_node.jumps)
-                or prev_node.opname == "NOP"
+                or prev_node.opname in ("NOP",)
             )
         ):
+            debug(
+                "Could not contract", prev_node, "!<<<!", self, "| next:", self.next, "jumps:", self.jumps, "| prev:", self.prev,
+            )
             return None
 
+        prev_node._container = self._container
         debug(
             "Contract backward", prev_node, "<<<", self, "|", self.next, self.jumps, "|", self.prev,
         )
@@ -163,47 +221,85 @@ class Node:
             opname = block.opname
             arg = block.arg
 
-            if opname == "RETURN_VALUE":
+            if opname in ("RETURN_VALUE",):
                 pass
             elif opname == "JUMP_FORWARD":
-                block.jumps.add(graph[block.op_idx + 2 + arg])
+                block.jumps.add(graph[block.offset + arg])
             elif opname == "JUMP_ABSOLUTE":
                 block.jumps.add(graph[arg])
             elif opname in (
                 "POP_JUMP_IF_TRUE",
                 "POP_JUMP_IF_FALSE",
+                "JUMP_IF_NOT_EXC_MATCH",
             ):
-                block.next = graph[block.op_idx + 2]
+                block.next = graph[block.offset]
                 block.jumps.add(graph[arg])
-            elif opname in ("FOR_ITER",):
-                block.next = graph[block.op_idx + 2]
-                block.jumps.add(graph[block.op_idx + 2 + arg])
+            elif opname in (
+                  "FOR_ITER",
+                  "SETUP_FINALLY",
+            ):
+                block.next = graph[block.offset]
+                block.jumps.add(graph[block.offset + arg])
             else:
-                block.next = graph[block.op_idx + 2]
+                if block.offset in graph:
+                    block.next = graph[block.offset]
 
             if block.next:
                 block.next.prev.add(block)
             for jump in block.jumps:
                 jump.prev.add(block)
 
-        for index, node in enumerate(graph_sort(graph)):
-            node.index = index
+        index = 0
+        sorted_nodes = []
+        for node in graph_sort(graph):
+            if node.opname == "NOP" or node.opname == "RERAISE" and node.arg == 0:
+                if node.next:
+                    for n in node.prev:
+                        if n.next is node:
+                            n.next = node.next
+                        n.jumps = {node.next if j is node else j for j in n.jumps} - {n.next}
+                    node.next.prev = (node.next.prev | node.prev) - {node}
+            else:
+                node.index = index
+                index += 1
+                sorted_nodes.append(node)
 
-        detect_loops(graph[0])
+        #detect_loops(sorted_nodes[0])
 
-        return graph[0]
+        return sorted_nodes[0]
 
     def __repr__(self):
         return f"[{self.op_idx}]({self.opname}, {self.arg})"
 
-    def draw(self):
+    @property
+    def arg_value(self):
+        opname = self.opname
+        if opname.startswith('LOAD_') or opname.startswith('STORE_'):
+            opname = opname[5:] if opname.startswith('LOAD_') else opname[6:]
+
+            if opname == "FAST":
+                return self.code.co_varnames[self.arg]
+            elif opname in ("NAME", "GLOBAL"):
+                return self.code.co_names[self.arg]
+            elif opname == "DEREF":
+                return (self.code.co_cellvars + self.code.co_freevars)[self.arg]
+            elif opname == "CONST":
+                return repr(self.code.co_consts[self.arg])
+            elif opname in ("ATTR", "METHOD"):
+                return self.code.co_names[self.arg]
+        elif opname.startswith("COMPARE_OP"):
+            return dis.cmp_op[self.arg]
+        else:
+            return self.arg
+
+
+    def draw(self, prog=None):
         from IPython.core.display import HTML
         import networkx as nx
 
         g = nx.DiGraph()
 
         visited = set()
-        positions = {}
 
         def rec(node: Node, pos):
             if node in visited:
@@ -212,9 +308,9 @@ class Node:
             source = node.to_source().split("\n")
             max_line = max(len(line) for line in source)
             label = "\n".join([
-                f"[{node.op_idx}]{'✓' if node.visited else ''}|{len(node.stack)}☰|{len(node.prev)}↣",
-                f"↺({','.join(str(i) for i in sorted(node.loops))})",
-                f"{node.opname}({node.arg})",
+                f"[{node.op_idx}]{'✓' if node.visited else ''}|{len(node.stack) if node.stack else 0}☰|{len(node.prev)}↣",
+                #f"↺({','.join(str(i) for i in sorted(node.loops))})",
+                f"{node.opname}({node.arg_value})",
                 "------------",
                 *[line.ljust(max_line) for line in source],
             ])
@@ -243,7 +339,7 @@ class Node:
         agraph.graph_attr.update(rankdir="LR", fontname="Menlo")
         agraph.node_attr.update(shape="box", fontname="Menlo")
         agraph.edge_attr.update(fontname="Menlo")
-        svg = agraph.draw(prog="dot", format="svg")
+        svg = agraph.draw(prog=DRAW_PROG if prog is None else prog, format="svg")
         return HTML(f'<div style="max-height: 100%; max-width: initial">{svg.decode()}</div>')
 
     def to_source(self):
@@ -256,8 +352,17 @@ class Node:
             res.append(astunparse.unparse(stmt))
         return "\n".join(res)
 
+    def last_stmts(self):
+        if self.stmts:
+            return self.stmts
+        prev_visited = [n for n in self.prev if n.visited]
+        if len(prev_visited) != 1:
+            return self.stmts
+        prev = next(iter(prev_visited), None)
+        return prev.last_stmts()
+
     # noinspection PyMethodParameters,PyMethodFirstArgAssignment
-    def run(node: "Node", stop_nodes: Set["Node"] = frozenset(), loop_heads: Tuple["Node"] = (), while_fusions={}):
+    def _run(node: "Node", stop_nodes: Set["Node"] = frozenset(), loop_heads: Tuple["Node"] = (), while_fusions={}, stop_on_jump: bool = False):
         """
         Convert the graph into an AST
         """
@@ -275,25 +380,33 @@ class Node:
             prev_visited = [n for n in node.prev if n.visited]
             if len(prev_visited) > 1:
                 debug("Too many prev visited", prev_visited, "for", node)
-                break
-            if prev_visited:
-                node.stack = list(prev_visited[0].stack)
+                raise Exception("Too many prev visited")
+            if node.stack is None:
+                if prev_visited and prev_visited[0].stack is not None:
+                    node.stack = list(prev_visited[0].stack)
+                else:
+                    node.stack = []
 
             prev_unvisited = [n for n in node.prev if not n.visited]
             if len(prev_unvisited):
                 loop_heads = (*loop_heads, node)
 
-            if node.opname.startswith("LOAD_"):
+            if node.opname == "LOAD_CLOSURE":
+                node.add_stack(None)
+            elif node.opname.startswith("LOAD_"):
                 process_binding_(node)
             elif node.opname.startswith("STORE_"):
                 process_store_(node)
+            elif node.opname.startswith("DELETE_") or node.opname.startswith("DEL_"):
+                process_binding_(node)
+                node.add_stmt(ast.Delete([node.pop_stack()]))
             elif node.opname == "RETURN_VALUE":
                 node.add_stmt(ast.Return(node.pop_stack()))
             elif node.opname in ("JUMP_FORWARD", "JUMP_ABSOLUTE"):
                 jump = next(iter(node.jumps))
-                
+
                 # If we don't leave any loop
-                same_context = loop_heads and explore_until(jump, loop_heads) is loop_heads[-1]
+                same_context = not loop_heads or explore_until(jump, loop_heads) is loop_heads[-1]
                 if jump.visited:
                     if same_context:
                         node.add_stmt(ast.Continue(_loop_node=jump))
@@ -302,7 +415,13 @@ class Node:
                 else:
                     if not same_context:
                         node.add_stmt(ast.Break(_loop_node=jump))
-            elif node.opname in ("POP_JUMP_IF_TRUE", "POP_JUMP_IF_FALSE"):
+            elif node.opname in ("POP_JUMP_IF_TRUE", "POP_JUMP_IF_FALSE", "JUMP_IF_NOT_EXC_MATCH"):
+                if node.opname == "JUMP_IF_NOT_EXC_MATCH":
+                    test = ExceptionMatch(node.pop_stack())
+                    node.pop_stack()
+                else:
+                    test = node.pop_stack()
+                node.jump_test = test
 
                 if_node = node.next
                 [else_node] = node.jumps
@@ -315,35 +434,35 @@ class Node:
                 ################
                 debug("IF/ELSE BLOCK", node, "LOOP HEADS", loop_heads, "IF", if_node, "ELSE", else_node)
 
+                real_branch = (
+                    next((n for n in loop_heads[-1].prev if n.next is loop_heads[-1]), None)
+                    if loop_heads
+                    else None
+                )
                 if (
-                      loop_heads
-                      and loop_heads[-1] is else_node
+                    real_branch
+                    and real_branch.jump_test
+                    and real_branch.opname == (
+                        "POP_JUMP_IF_FALSE" if node.opname == "POP_JUMP_IF_TRUE" else "POP_JUMP_IF_TRUE"
+                    )
+                    and ast.dump(real_branch.jump_test) == ast.dump(test)
                 ):
-                    real_branch = next(n for n in loop_heads[-1].prev if n.next is loop_heads[-1])
-                    if (
-                          real_branch.stack and
-                          real_branch.stack[-1] and
-                          real_branch.opname == ("POP_JUMP_IF_FALSE" if node.opname == "POP_JUMP_IF_TRUE" else "POP_JUMP_IF_TRUE") and
-                          # real_head.arg == node.arg and
-                          ast.dump(real_branch.stack[-1]) == ast.dump(node.stack[-1])
-                    ):
-                        real_head = get_origin(real_branch.stack[-1])[0]
+                    real_head = get_origin(real_branch.jump_test)[0].container
 
-                        debug("THIS SHOULD BE A CONDITIONAL WHILE LOOP", ast.dump(node.stack[-1]))
-                        node.add_stmt(ast.Continue())
-                        node.next.prev.discard(node)
-                        node.next = None
-                        node.jumps = {real_head}
-                        else_node.prev.remove(node)
-                        real_head.prev.add(node)
-                        real_branch.is_conditional_while = True
-                        node.pop_stack()
-                        while_fusions[real_head] = else_node
-                        loop_heads = loop_heads[:-1]
-                        if loop_heads and loop_heads[-1] is not real_head:
-                            loop_heads = (*loop_heads, real_head)
-                    else:
-                        debug("NOT CONDITIONAL WHILE LOOP", real_branch.stack, real_branch.opname, real_branch.arg, ast.dump(real_branch.stack[-1]), ast.dump(node.stack[-1]))
+                    debug("THIS SHOULD BE A CONDITIONAL WHILE LOOP", ast.dump(test))
+                    # node.add_stmt(ast.Continue())
+                    node.next.prev.discard(node)
+                    node.next = None
+                    node.jumps = {real_head}
+                    else_node.prev.remove(node)
+                    real_head.prev.add(node)
+                    real_branch.is_conditional_while = True
+                    while_fusions[real_head] = else_node
+                    loop_heads = loop_heads[:-1]
+                    if loop_heads and loop_heads[-1] is not real_head:
+                        loop_heads = (*loop_heads, real_head)
+                    # else:
+                    #     debug("NOT CONDITIONAL WHILE LOOP", real_branch.stack, real_branch.opname, real_branch.arg, ast.dump(real_branch.stack[-1]), ast.dump(node.stack[-1]))
                 ################
                 else:
                     meet_nodes = lowest_common_successor(
@@ -355,12 +474,12 @@ class Node:
                     assert len(meet_nodes) <= 1
 
                     before = (if_node, else_node)
-                    if_node = if_node.run(
+                    if_node = if_node._run(
                         stop_nodes={*stop_nodes, *meet_nodes, node},
                         loop_heads=loop_heads,
                         while_fusions=while_fusions,
                     )
-                    else_node = else_node.run(
+                    else_node = else_node._run(
                         stop_nodes={*stop_nodes, *meet_nodes, node},
                         loop_heads=loop_heads,
                         while_fusions=while_fusions,
@@ -368,9 +487,31 @@ class Node:
                     debug("IF/ELSE", node, "MEET", meet_nodes)
                     debug("IF/ELSE", node, "BEFORE succ", before, "-> AFTER succ", if_node, else_node)
 
-                    test = node.pop_stack()
-                    node.add_stmt(
-                        ast.If(
+                    if_item = if_node.pop_stack() if len(if_node.stack) > len(node.stack) else None
+                    else_item = else_node.pop_stack() if else_node and len(else_node.stack) > len(node.stack) else None
+
+                    if if_node.stmts:
+                        node.add_stmt(
+                            ast.If(
+                                test=(
+                                    test
+                                    if node.opname != "POP_JUMP_IF_TRUE"
+                                    else ast.UnaryOp(
+                                        op=ast.Not(),
+                                        operand=test,
+                                    )
+                                ),
+                                body=if_node.stmts if if_node else [],
+                                orelse=(
+                                    else_node.stmts if else_node
+                                    else [] if not loop_heads or explore_until(old_else_node, loop_heads) is loop_heads[-1]
+                                    #else [ast.Break(_loop_node=get_origin(test)[0])]
+                                    else [ast.Break()]
+                                ),
+                            )
+                        )
+                    if if_item:
+                        ternary_expr = ast.IfExp(
                             test=(
                                 test
                                 if node.opname == "POP_JUMP_IF_FALSE"
@@ -379,35 +520,28 @@ class Node:
                                     operand=test,
                                 )
                             ),
-                            body=if_node.stmts if if_node else [],
-                            orelse=(
-                                else_node.stmts if else_node
-                                else [] if not loop_heads or explore_until(old_else_node, (*loop_heads, *stop_nodes)) is loop_heads[-1]
-                                #else [ast.Break(_loop_node=get_origin(test)[0])]
-                                else [ast.Break()]
-                            ),
+                            body=if_item,
+                            orelse=else_item,
                         )
-                    )
+                        #for item in if_node.stack:
+                        #    node.add_stack(item)
+                        node.add_stack(ternary_expr)
 
                     # noinspection PyTypeChecker
                     successors: Set[Node] = {
-                                                *((if_node.next, *if_node.jumps) if if_node else (node.next,)),
-                                                *((else_node.next, *else_node.jumps) if else_node else node.jumps),
-                                            } - {
-                                                None
-                                            }  # type: ignore
-                    successors = {
-                        succ
-                        for succ in successors
-                    }
+                        *((if_node.next, *if_node.jumps) if if_node else (node.next,)),
+                        *((else_node.next, *else_node.jumps) if else_node else node.jumps),
+                    } - {
+                        None
+                    }  # type: ignore
                     discarded_successors = {
                         n for n in (if_node, else_node, old_if_node, old_else_node)
                         if n and n.visited
                     }
+                    debug("IF SUCC", successors, "-", discarded_successors)
+                    debug("IF PREV", node.prev)
                     successors = successors - discarded_successors
 
-                    debug("No next node, only jumps to", successors)
-                    next_node = None
                     jump_nodes = successors
                     for succ in successors:
                         debug("IF/ELSE", node, ": REBINDING SUCCESSOR", succ, "=>", succ.prev, "->", succ.prev - {if_node, else_node} | {node})
@@ -417,15 +551,460 @@ class Node:
                             if p.next in discarded_successors:
                                 p.next = node
                             p.jumps = {node if j in discarded_successors else j for j in p.jumps}
-                    node.next = next_node
+                        n.prev = n.prev - discarded_successors
+                    node.next = None
                     node.jumps = jump_nodes
+                    debug("IF/ELSE", node, node.stack)
 
                     if DEBUG:
                         display(node.draw())
 
-            while True:
+            elif node.opname == "SETUP_FINALLY":
+                process_try_(node, loop_heads, stop_nodes, while_fusions)
+            elif node.opname == "RERAISE":
+                #("REMOVING RERAISE", node, "STOP NODES", stop_nodes)
+                #for n in node.prev:
+                #    if n.next is node:
+                #        n.next = node.next
+                #    n.jumps = {node.next if j is node else j for j in n.jumps} - {n.next}
+                #node.next.prev = (node.next.prev | node.prev) - {node}
+                node.add_stmt(Reraise())
+            elif node.opname == "POP_BLOCK":
+                pass
+            elif node.opname == "GET_ITER":
+                # During eval, pop and applies iter() to TOS
+                pass
+            elif node.opname == "FOR_ITER":
+                old_body_node = body_node = node.next
+
+                iter_item = node.pop_stack()
+                iter_item._dumped = True
+
+                placeholder = ForTargetPlaceholder()
+                placeholder._origin_offset=node.op_idx
+                placeholder._origin_node=node
+
+                body_node.stack = [*node.stack, iter_item, placeholder]
+                body_node = body_node._run(
+                    stop_nodes={*stop_nodes, node},
+                    loop_heads=loop_heads,
+                    while_fusions=while_fusions,
+                )
+                debug("BODY", [ast.dump(x) for x in body_node.stmts])
+                target = body_node.stmts.pop(0).targets[0]
+
+                node.add_stmt(
+                    ast.For(
+                        target=target,
+                        iter=iter_item,
+                        body=body_node.stmts if body_node else [],
+                        orelse=[],  # TODO
+                    )
+                )
+                successors = {body_node.next, *body_node.jumps, *node.jumps} - {None}
+                discarded_successors = {
+                    n for n in (body_node, old_body_node, node)
+                    if n and n.visited
+                }
+                debug("FOR SUCC", successors, "-", discarded_successors)
+                debug("FOR PREV", node.prev)
+                successors = successors - discarded_successors
+                jump_nodes = successors
+                for succ in successors:
+                    succ.prev = (succ.prev - discarded_successors) | {node}
+                for n in discarded_successors:
+                    for p in n.prev:
+                        if p.next in discarded_successors:
+                            p.next = node
+                        p.jumps = {node if j in discarded_successors else j for j in p.jumps}
+                node.next.prev.discard(node)
+                node.next = None
+                node.jumps = jump_nodes
+                node.prev -= discarded_successors
+                loop_heads = loop_heads[:-1]
+            elif node.opname == "COMPARE_OP":
+                if compareop_to_ast[node.arg] != "exception match":
+                    right = node.pop_stack()
+                    left = node.pop_stack()
+                else:
+                    left = node.pop_stack()
+                    # right = stack.pop()[1]
+                    right = None
+                node.add_stack(
+                    ast.Compare(
+                        left=left,
+                        ops=[compareop_to_ast[node.arg]],
+                        comparators=[right],
+                    ),
+                )
+            elif node.opname in binop_to_ast:
+                right = node.pop_stack()
+                left = node.pop_stack()
+                node.add_stack(
+                    ast.BinOp(left=left, op=binop_to_ast[node.opname], right=right),
+                )
+            elif node.opname == "CONTAINS_OP":
+                right = node.pop_stack()
+                left = node.pop_stack()
+                node.add_stack(
+                    ast.Compare(
+                        left=left,
+                        ops=[ast.In() if node.arg == 0 else ast.NotIn()],
+                        comparators=[right],
+                    ),
+                )
+            elif node.opname == "IS_OP":
+                right = node.pop_stack()
+                left = node.pop_stack()
+                node.add_stack(
+                    ast.Compare(
+                        left=left,
+                        ops=[ast.Is() if node.arg == 0 else ast.IsNot()],
+                        comparators=[right],
+                    ),
+                )
+            elif node.opname == "BINARY_SUBSCR":
+                slice = node.pop_stack()
+                value = node.pop_stack()
+                node.add_stack(ast.Subscript(value, slice))
+            elif node.opname in unaryop_to_ast:
+                value = node.pop_stack()
+                node.add_stack(ast.UnaryOp(op=unaryop_to_ast[node.opname], operand=value))
+            elif node.opname in inplace_to_ast:
+                right = node.pop_stack()
+                left = node.pop_stack()
+                node.add_stack(
+                    ast.AugAssign(target=left, op=inplace_to_ast[node.opname], value=right),
+                )
+            elif node.opname == "BUILD_SLICE":
+                values = [node.pop_stack() for _ in range(node.arg)][::-1]
+                if node.arg == 2:
+                    values = values + [None]
+                node.add_stack(ast.Slice(*values))
+            elif node.opname == "BUILD_LIST":
+                items = [node.pop_stack() for _ in range(node.arg)][::-1]
+                node.add_stack(ast.List(items))
+            elif node.opname == "BUILD_TUPLE":
+                items = [node.pop_stack() for _ in range(node.arg)][::-1]
+                node.add_stack(ast.Tuple(items))
+            elif node.opname == "BUILD_CONST_KEY_MAP":
+                keys = [ast.Constant(key, kind=None) for key in node.pop_stack().value]
+                values = [node.pop_stack() for _ in range(node.arg)][::-1]
+                node.add_stack(ast.Dict(keys, values))
+            elif node.opname == "BUILD_SET":
+                items = [node.pop_stack() for _ in range(node.arg)][::-1]
+                node.add_stack(ast.Set(items))
+            elif node.opname == "BUILD_MAP":
+                keys = []
+                values = []
+                for _ in range(node.arg):
+                    values.append(node.pop_stack())
+                    keys.append(node.pop_stack())
+                node.add_stack(ast.Dict(keys, values))
+            elif node.opname == "LIST_TO_TUPLE":
+                value = node.pop_stack()
+                node.add_stack(ast.Tuple(value.elts))
+            elif node.opname == "UNPACK_SEQUENCE":
+                value = node.pop_stack()
+                for i in reversed(range(node.arg)):
+                    node.add_stack(Unpacking(value, counter=i))
+            elif node.opname == "UNPACK_EX":
+                # FROM Python's doc:
+                # The low byte of counts is the number of values before the list value,
+                # the high byte of counts the number of values after it. The resulting
+                # values are put onto the stack right-to-left.
+                value = node.pop_stack()
+                before, after = node.arg & 0xFF, node.arg >> 8
+
+                for i in reversed(range(before + after + 1)):
+                    node.add_stack(Unpacking(value, counter=i, starred=i == before))
+            elif node.opname in ("LIST_EXTEND", "SET_UPDATE"):
+                items = node.pop_stack()
+                if isinstance(items, ast.Constant):
+                    items = [ast.Constant(x) for x in items.value]
+                elif hasattr(items, 'elts'):
+                    items = items.elts
+                else:
+                    items = [ast.Starred(items)]
+                obj = node.stack[-node.arg]
+                obj = type(obj)(elts=[*obj.elts, *items])
+                node.stack[-node.arg] = obj
+            elif node.opname in ("DICT_UPDATE", "DICT_MERGE"):
+                items = node.pop_stack()
+                if isinstance(items, ast.Constant):
+                    items = [(ast.Name(n), ast.Constant(v)) for n, v in items.value.items()]
+                #elif hasattr(items, 'keys'):
+                #    items = [(k, v) for k, v in zip(items.keys, items.values)]
+                else:
+                    items = [(None, items)]
+                obj = node.stack[-node.arg]
+                assert isinstance(obj, ast.Dict)
+                obj = ast.Dict([*obj.keys, *(k for k, _ in items)],
+                               [*obj.values, *(v for _, v in items)])
+                node.stack[-node.arg] = obj
+            # TODO: check in for/while loop ?
+            elif node.opname in ("LIST_APPEND", "SET_ADD"):
+                value = node.pop_stack()
+                collection = node.stack[-node.arg]
+                # if we can loop to the collection beginning
+                if loop_heads and explore_until(node, {*loop_heads, collection}) is loop_heads[-1]:
+                    node.add_stmt(ComprehensionBody(value, collection))
+                else:
+                    assert hasattr(collection, 'elts')
+                    collection = type(collection)(elts=[*collection.elts, value])
+                    node.stack[-node.arg] = collection
+            elif node.opname == "MAP_ADD":
+                value = node.pop_stack()
+                key = node.pop_stack()
+                collection = node.stack[-node.arg]
+                # if we can loop to the collection beginning
+                if loop_heads and explore_until(node, {*loop_heads, collection}) is loop_heads[-1]:
+                    node.add_stmt(ComprehensionBody((key, value), collection))
+                else:
+                    assert hasattr(collection, 'elts')
+                    collection = type(collection)(
+                        keys=[*collection.keys, key],
+                        values=[*collection.values, value],
+                    )
+                    node.stack[-node.arg] = collection
+            elif node.opname == "YIELD_VALUE":
+                node.add_stmt(ast.Expr(ast.Yield(node.pop_stack())))
+            elif node.opname == "MAKE_FUNCTION":
+                assert node.arg in (0, 8), node.arg
+                node.pop_stack()  # function name
+                func_code: ast.Constant = node.pop_stack()
+                if node.arg == 8:
+                    node.pop_stack()
+                assert isinstance(func_code, ast.Constant)
+                code = func_code.value
+                function_node = Node.from_code(code)
+                if DEBUG:
+                    display(function_node.draw())
+                sub_function_body = function_node.run().stmts
+
+                node.add_stack(ast.FunctionDef(
+                    name=code.co_name,
+                    args=ast.arguments(
+                        args=[
+                            ast.arg(arg=arg, annotation=None)
+                            for arg in code.co_varnames[: code.co_argcount]
+                        ],
+                        vararg=None,
+                        kwonlyargs=[],
+                        kw_defaults=[],
+                        kwarg=None,
+                        defaults=[],
+                        posonlyargs=[],
+                    ),
+                    body=sub_function_body,
+                    decorator_list=[],
+                    returns=None,
+                ))
+            elif node.opname in ("CALL_FUNCTION", "CALL_METHOD"):
+                args = [node.pop_stack() for _ in range(node.arg)][::-1]
+                func = node.pop_stack()
+                if isinstance(func, ast.FunctionDef):
+
+                    class RewriteComprehensionArgs(ast.NodeTransformer):
+                        def visit_Name(self, node):
+                            if node.id.startswith("."):
+                                var_idx = int(node.id[1:])
+                                return args[var_idx]
+                            return node
+
+                        def visit_For(self, node: ast.For):
+                            nonlocal cls
+                            assert (
+                                  len(node.body) == 1
+                                  or len(node.body) == 2 and isinstance(node.body[1], ast.Continue)
+                            )
+                            target = self.visit(node.target)
+                            elt = self.visit(node.body[0])
+                            iter = self.visit(node.iter)
+                            condition = None
+                            if isinstance(elt, ast.If):
+                                condition = elt.test
+                                assert (
+                                      len(elt.body) == 1
+                                      or len(elt.body) == 2 and isinstance(elt.body[1], ast.Continue)
+                                )
+                                elt = elt.body[0]
+                            generators = [
+                                ast.comprehension(
+                                    target=target,
+                                    iter=iter,
+                                    ifs=[condition]
+                                    if condition is not None
+                                    else [],  # TODO
+                                    is_async=False, # TODO
+                                )
+                            ]
+                            # if not isinstance(elt, ast.IfExp):
+                            #    raise Exception("Expected IfExp instead of " + ast.dump(elt))
+                            # TODO handle DictComp
+                            if cls and isinstance(elt, cls):
+                                generators = generators + elt.generators
+                                elt = elt.elt
+                            elif isinstance(elt, ComprehensionBody):
+                                cls = {
+                                    ast.List: ast.ListComp,
+                                    ast.Set: ast.SetComp,
+                                    ast.Dict: ast.DictComp,
+                                }[type(elt.collection)]
+                                elt = elt.value
+                            elif isinstance(elt, ast.Expr) and isinstance(elt.value, ast.Yield):
+                                cls = ast.GeneratorExp
+                                elt = elt.value.value
+                            else:
+                                raise Exception("Unexpected " + ast.dump(elt) + ", cls:" + str(cls))
+
+                            if issubclass(cls, ast.DictComp):
+                                return ast.DictComp(
+                                    key=elt[0],
+                                    value=elt[1],
+                                    generators=generators,
+                                    ifs=[],
+                                )
+                            else:
+                                return cls(
+                                    elt=elt,
+                                    generators=generators,
+                                    ifs=[],
+                                )
+
+                    assert len(func.body) == 2
+                    cls: Optional[Type[ast.AST]] = None
+                    tree = RewriteComprehensionArgs().visit(func)
+
+                    if len(func.body) == 1 or isinstance(func.body[1], ast.Return):
+                        tree = func.body[0]
+                    node.add_stack(tree)
+                else:
+                    node.add_stack(
+                        ast.Call(
+                            func=func,
+                            args=args,
+                            keywords=[],
+                        ),
+                    )
+            elif node.opname == "CALL_FUNCTION_KW":
+                keys = node.pop_stack().value
+                values = [node.pop_stack() for _ in range(len(keys))][::-1]
+                args = [node.pop_stack() for _ in range(node.arg - len(keys))][::-1]
+                func = node.pop_stack()
+                node.add_stack(
+                    ast.Call(
+                        func=func,
+                        args=args,
+                        keywords=[
+                            ast.keyword(arg=key, value=value)
+                            for key, value in zip(keys, values)
+                        ],
+                    ),
+                )
+            elif node.opname == "CALL_FUNCTION_EX":
+                if node.arg & 0x01:
+                    kwargs = node.pop_stack()
+                    args = node.pop_stack()
+                else:
+                    kwargs = None
+                    args = node.pop_stack()
+                func = node.pop_stack()
+                if isinstance(kwargs, ast.Dict):
+                    keywords = [
+                        ast.keyword(
+                            arg=key.value if key is not None else None, value=value
+                        )
+                        for key, value in zip(kwargs.keys, kwargs.values)
+                    ]
+                else:
+                    keywords = [ast.keyword(arg=None, value=kwargs)]
+                if hasattr(args, "elts"):
+                    args = args.elts
+                elif isinstance(args, ast.Constant) and isinstance(
+                    args.value, (tuple, list)
+                ):
+                    args = [ast.Constant(value=elt, kind=True) for elt in args.value]
+                node.add_stack(
+                    ast.Call(
+                        func=func,
+                        args=args,
+                        keywords=keywords,
+                    ),
+                )
+            elif node.opname == "NOP":
+                pass
+            elif node.opname == "DUP_TOP":
+                node.add_stack(node.stack[-1])
+            elif node.opname == "ROT_TWO":
+                s = node.stack
+                s[-1], s[-2] = s[-2], s[-1]
+            elif node.opname == "ROT_THREE":
+                s = node.stack
+                s[-1], s[-2], s[-3] = s[-2], s[-3], s[-1]
+            elif node.opname == "ROT_FOUR":
+                s = node.stack
+                s[-1], s[-2], s[-3], s[-4] = s[-2], s[-3], s[-4], s[-1]
+            elif node.opname == "POP_TOP":
+                item = node.pop_stack()
+                if item and not getattr(item, '_dumped', False):
+                    node.add_stmt(ast.Expr(item))
+            elif node.opname == "POP_EXCEPT":
+                node.pop_stack()
+            elif node.opname == "FORMAT_VALUE":
+                fmt_spec = None
+                conversion = -1
+                if node.arg & 0x03 == 0x00:
+                    conversion = -1
+                elif node.arg & 0x03 == 0x01:
+                    conversion = 115
+                elif node.arg & 0x03 == 0x02:
+                    conversion = 114
+                elif node.arg & 0x03 == 0x03:
+                    conversion = 97
+                if node.arg & 0x04 == 0x04:
+                    fmt_spec = node.pop_stack()
+                    if not isinstance(fmt_spec, ast.JoinedStr):
+                        fmt_spec = ast.JoinedStr([fmt_spec])
+                value = node.pop_stack()
+                node.add_stack(
+                    ast.JoinedStr(
+                        [
+                            ast.FormattedValue(
+                                value=value,
+                                conversion=conversion,
+                                format_spec=fmt_spec,
+                            )
+                        ]
+                    ),
+                )
+            elif node.opname == "BUILD_STRING":
+                values = [node.pop_stack() for _ in range(node.arg)][::-1]
+                values = [
+                    part
+                    for v in values
+                    for part in (v.values if isinstance(v, ast.JoinedStr) else [v])
+                ]
+                node.add_stack(ast.JoinedStr(values=values))
+            elif node.opname == "GEN_START":
+                # Python docs say: "Pops TOS. The kind operand corresponds to the type
+                # of generator or coroutine. The legal kinds are 0 for generator, 1 f
+                # or coroutine, and 2 for async generator."
+                # However, there are no item in the stack (from the bytecode
+                # perspective) at the start of a generator comprehension function
+                # if node.index > 0:
+                #    node.pop_stack()
+                pass
+            else:
+                raise NotImplementedError(node.opname)
+
+            # Handle while loops by detecting cycles of length 1
+            prev_visited = [n for n in node.prev if n.visited]
+            debug("STACKS", "node", node, len(node.stack), node.stack, "prev", prev_visited, len(prev_visited[-1].stack) if prev_visited else 0, prev_visited[-1].stack if prev_visited else None)
+            debug("LOOP HEADS", "node", node, "PREV", node.prev, "=>", loop_heads)
+            while not prev_visited or len(node.stack) <= len(prev_visited[-1].stack):
                 prev = node.contract_backward()
-                if not prev:
+                if not prev and not node.prev == {node}:
                     break
                 if loop_heads and loop_heads[-1] is prev:
                     loop_heads = (*loop_heads[:-1], node)
@@ -461,15 +1040,17 @@ class Node:
                     prev_unvisited = [n for n in node.prev if not n.visited]
                     if len(prev_unvisited):
                         loop_heads = (*loop_heads, node)
+                prev_visited = [n for n in node.prev if n.visited]
                 if DEBUG:
                     display(node.draw())
+                debug("STACKS", "node", node, len(node.stack), "prev", prev_visited, len(prev_visited[-1].stack) if prev_visited else 0)
 
             if DEBUG:
                 display(node.draw())
 
             debug("::: done", node, "|", node.next, node.jumps, "|", node.prev)
 
-            if not node.next:
+            if not node.next and not stop_on_jump:
                 if loop_heads:
                     jump_to_head = {
                         n: explore_until(n, (*loop_heads, *stop_nodes))
@@ -497,22 +1078,29 @@ class Node:
 
         return node
 
+    def run(self) -> "Node":
+        """Decompile a code object"""
+        while_fusions = {}
+        node = self._run(while_fusions=while_fusions)
+
+        class WhileBreakFixer(ast.NodeTransformer):
+            def visit_Break(self, node):
+                if hasattr(node, '_loop_node') and node._loop_node in while_fusions:
+                    debug("NODE BREAK", node, node._loop_node)
+                    return ast.Continue()
+                return node
+
+        node.stmts = [WhileBreakFixer().visit(stmt) for stmt in node.stmts]
+
+        return node
+
+
 def decompile(code: CodeType) -> str:
     """Decompile a code object"""
-    root = Node.from_code(code)
-    while_fusions = {}
-    node = root.run(while_fusions=while_fusions)
-    debug("WHILE FUSIONS", while_fusions)
-
-    class WhileBreakFixer(ast.NodeTransformer):
-        def visit_Break(self, node):
-            if hasattr(node, '_loop_node') and node._loop_node in while_fusions:
-                debug("NODE BREAK", node, node._loop_node)
-                return ast.Continue()
-            return node
-
-    node.stmts = [WhileBreakFixer().visit(stmt) for stmt in node.stmts]
-    return node.to_source()
+    node = Node.from_code(code)
+    if DEBUG:
+        display(node.draw())
+    return node.run().to_source()
 
 
 def detect_first_node(root):
@@ -565,7 +1153,7 @@ def explore_until(root, stops):
 
     return rec(root)
 
-def process_binding_(node):
+def process_binding_(node, save_origin=True):
     # assert len(block.pred) <= 1
     opname = node.opname
     arg = node.arg
@@ -573,28 +1161,27 @@ def process_binding_(node):
     idx = node.op_idx
     opname = opname.split("_")[1]
 
+    origin = (dict(
+        _origin_offset=idx,
+        _origin_node=node,
+    ) if save_origin else {})
+
     if opname == "FAST":
         node.add_stack(
             ast.Name(
-                id=code.co_varnames[arg],
-                _origin_offset=idx,
-                _origin_node=node,
+                id=code.co_varnames[arg], **origin,
             )
         )
     elif opname in ("NAME", "GLOBAL"):
         node.add_stack(
             ast.Name(
-                id=code.co_names[arg],
-                _origin_offset=idx,
-                _origin_node=node,
+                id=code.co_names[arg], **origin,
             )
         )
     elif opname == "DEREF":
         node.add_stack(
             ast.Name(
-                id=(code.co_cellvars + code.co_freevars)[arg],
-                _origin_offset=idx,
-                _origin_node=node,
+                id=(code.co_cellvars + code.co_freevars)[arg], **origin,
             )
         )
     elif opname == "CONST":
@@ -604,9 +1191,7 @@ def process_binding_(node):
         node.add_stack(
             ast.Constant(
                 value=const_value,
-                kind=None,
-                _origin_offset=idx,
-                _origin_node=node,
+                kind=None, **origin,
             )
         )
     # ATTRIBUTES
@@ -615,9 +1200,7 @@ def process_binding_(node):
         node.add_stack(
             ast.Attribute(
                 value=value,
-                attr=code.co_names[arg],
-                _origin_offset=idx,
-                _origin_node=node,
+                attr=code.co_names[arg], **origin,
             )
         )
     elif opname in ("SUBSCR",):
@@ -625,25 +1208,24 @@ def process_binding_(node):
         node.add_stack(
             ast.Subscript(
                 slice=value,
-                value=node.pop_stack()[1],
-                _origin_offset=idx,
-                _origin_node=node,
+                value=node.pop_stack(), **origin,
             )
         )
     else:
-        raise ValueError("Unknown opname", opname)
+        raise ValueError("Unknown opname", opname) # pragma: no cover
 
 
 def process_store_(node: Node):
     process_binding_(node)
     target = node.pop_stack()
     value = node.pop_stack()
-    idx = node.op_idx
     if isinstance(value, ast.AugAssign):
         node.add_stmt(value)
     elif isinstance(value, ast.FunctionDef) and isinstance(target, ast.Name):
         node.add_stmt(value)
     else:
+        last_stmts = node.last_stmts()#next(iter(node.prev)).stmts if len(node.prev) == 1 else []
+
         unpacking = value if isinstance(value, Unpacking) else None
         if unpacking:
             value = value.value
@@ -652,12 +1234,20 @@ def process_store_(node: Node):
         else:
             multi_targets = [target]
 
-        if (
-            len(node.stmts)
-            and isinstance(node.stmts[-1], ast.Assign)
-            and idx <= get_origin(target)[1]
-        ):
-            prev = node.stmts.pop()
+
+        try:
+            is_multi_assignment = (
+                len(last_stmts)
+                and isinstance(last_stmts[-1], ast.Assign)
+                and get_origin(value)[1] <= get_origin(last_stmts[-1].targets)[1]
+            )
+            debug(f"ORIGIN of {ast.dump(value)}", get_origin(value)[1], f"vs ORIGIN of last {ast.dump(last_stmts[-1])}", get_origin(last_stmts[-1].targets)[1])
+        except Exception as e:
+            is_multi_assignment = False
+
+        debug("VALUE", value, "LAST", last_stmts, "MULTI", multi_targets, "UNPACKING", unpacking, "=> IS_MULTI:", is_multi_assignment)
+        if is_multi_assignment:
+            prev = last_stmts.pop()
             prev_multi_targets = prev.targets
 
             if (
@@ -699,3 +1289,135 @@ def process_store_(node: Node):
             ),
             # start=op_idx,
         )
+
+
+def process_try_(node, loop_heads, stop_nodes, while_fusions):
+    next_node = node.next
+    [jump_node] = node.jumps
+
+    old_next_node = next_node
+    old_jump_node = jump_node
+    jump_node.stack = [*node.stack, None, None, ExceptionPlaceholder(_dumped=True), None]
+
+    meet_nodes = list(lowest_common_successor(
+        next_node,
+        jump_node,
+        stop_nodes={*stop_nodes, node},
+    ))
+    debug("TRY BLOCK", node, "MEET", meet_nodes, "(STOP at", {*stop_nodes, node}, ")")
+    assert len(meet_nodes) <= 1
+
+    before = (next_node, jump_node)
+    next_node = next_node._run(
+        stop_nodes={*stop_nodes, *meet_nodes, node},
+        loop_heads=loop_heads,
+        while_fusions=while_fusions,
+    )
+    jump_node = jump_node._run(
+        stop_nodes={*stop_nodes, *meet_nodes, node},
+        loop_heads=loop_heads,
+        while_fusions=while_fusions,
+    )
+    if len(meet_nodes) and meet_nodes[0].opname == "POP_BLOCK" and meet_nodes[0] not in stop_nodes:
+        finally_node = meet_nodes[0]
+        old_finally_node = finally_node
+        old_prev, finally_node.prev = finally_node.prev, {node}
+        print("FOUND FINALLY", finally_node, "STOP AT", {*stop_nodes, node})
+        finally_node = finally_node._run(
+            stop_nodes={*stop_nodes, node},
+            loop_heads=loop_heads,
+            while_fusions=while_fusions,
+            stop_on_jump=True,
+        )
+        finally_node.prev = old_prev
+    else:
+        finally_node = old_finally_node = None
+
+    debug("TRY", node, "MEET", meet_nodes)
+    debug("TRY", node, "BEFORE succ", before, "-> AFTER succ", next_node, jump_node)
+
+    handlers = []
+    finalbody = []
+    if jump_node.stmts and isinstance(jump_node.stmts[0], ast.If) and isinstance(jump_node.stmts[0].test, ExceptionMatch):
+        except_stmts = list(jump_node.stmts[0].body)
+        if isinstance(except_stmts[0], ast.Assign) and isinstance(except_stmts[0].value, ExceptionPlaceholder):
+            name = except_stmts.pop(0).targets[0].id
+            # To handle auto-generated try/finally block
+            # with e = None; del e; instruction at the end of the generated try body
+            except_stmts = list(except_stmts[0].body)
+            i = next(i for i, s in enumerate(except_stmts) if isinstance(s, ast.Delete) and s.targets[0].id == name)
+            except_stmts = except_stmts[:i-1] + except_stmts[i+1:]
+        else:
+            name = None
+        handlers.append(
+            ast.ExceptHandler(
+                type=jump_node.stmts[0].test.value,
+                name=name,
+                body=except_stmts,
+            )
+        )
+    elif isinstance(jump_node.stmts[-1], Reraise):
+        finalbody = jump_node.stmts[:-1]
+    else:
+        handlers.append(
+            ast.ExceptHandler(
+                type=None,
+                name=None,
+                body=jump_node.stmts,
+            )
+        )
+    if finally_node:
+        finalbody = finally_node.stmts
+
+    if (
+          next_node.stmts
+          and isinstance(next_node.stmts[0], ast.Try)
+          and not getattr(next_node.stmts[0], "_try_was_deduplicated", False)
+          and next_node.stmts[0].handlers
+          and next_node.stmts[0].finalbody
+    ):
+        print("DEDUPLICATING TRY", next_node.stmts[0], "WITH", node)
+        next_node.stmts[0]._try_was_deduplicated = True
+        node.stmts.extend(next_node.stmts)
+    else:
+        node.add_stmt(
+            ast.Try(
+                body=next_node.stmts if next_node else [ast.Pass()],
+                handlers=handlers,
+                orelse=[],  # TODO
+                finalbody=finalbody,  # TODO
+            )
+        )
+
+    # noinspection PyTypeChecker
+    successors: Set[Node] = {
+                                *((next_node.next, *next_node.jumps) if next_node else (node.next,)),
+                                *((jump_node.next, *jump_node.jumps) if jump_node else node.jumps),
+                                *((finally_node.next, *finally_node.jumps) if finally_node else ()),
+                            } - {
+                                None
+                            }  # type: ignore
+    discarded_successors = {
+        n for n in (next_node, jump_node, old_next_node, old_jump_node, finally_node, old_finally_node)
+        if n and n.visited
+    }
+    debug("TRY SUCC", successors, "-", discarded_successors)
+    debug("TRY PREV", node.prev)
+    successors = successors - discarded_successors
+
+    jump_nodes = successors
+    for succ in successors:
+        debug("TRY", node, ": REBINDING SUCCESSOR", succ, "=>", succ.prev, "->", succ.prev - {next_node, jump_node} | {node})
+        succ.prev = (succ.prev - discarded_successors) | {node}
+    for n in discarded_successors:
+        for p in n.prev:
+            if p.next in discarded_successors:
+                p.next = node
+            p.jumps = {node if j in discarded_successors else j for j in p.jumps}
+        n.prev = n.prev - discarded_successors
+    node.next = None
+    node.jumps = jump_nodes
+    debug("TRY", node, node.stack)
+
+    if DEBUG:
+        display(node.draw())
