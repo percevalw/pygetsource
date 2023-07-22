@@ -72,18 +72,18 @@ hasjabs = ["JUMP_ABSOLUTE", "FOR_ITER", "POP_JUMP_IF_FALSE", "POP_JUMP_IF_TRUE",
 
 
 
-def graph_sort(graph):
+def graph_sort(root):
     """
     Topological sort of graph
 
     Parameters
     ----------
-    graph: dict[int, Block]
-        The graph to sort
+    root: Node
+        The root node of the graph to sort
 
     Returns
     -------
-    list[Block]
+    list[Node]
         Keys of the graph in topological order
     """
 
@@ -101,7 +101,7 @@ def graph_sort(graph):
         order.append(block)
 
     # TODO handle disjoint components
-    dfs(graph[0])
+    dfs(root)
     return order[::-1]
 
 
@@ -138,7 +138,9 @@ def lowest_common_successor(*starts, stop_nodes=None):
         for i, node in enumerate(nodes):
             if not node or node in stop_nodes:
                 continue
-            for succ in (node.next, *node.jumps):
+            else:
+                successors = (node.next, *node.jumps)
+            for succ in successors:
                 if succ and succ not in visited[i] and not succ.visited:
                     queues[i].append(succ)
                     visited[i].add(succ)

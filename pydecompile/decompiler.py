@@ -20,7 +20,8 @@ try:
     assert hasattr(astunparse, "unparse")
     print("Using ast.unparse")
 except AssertionError:
-    import astunparse as astunparse
+    import astunparse
+from astunparse.unparser import Unparser
 from types import CodeType
 
 INDENT = 0
@@ -67,6 +68,11 @@ class ForTargetPlaceholder(ast.AST):
     _attributes = ()
     _fields = ()
 
+def unparse_ForTargetPlaceholder(self, node):
+    self.write("[...]")
+
+Unparser._ForTargetPlaceholder = unparse_ForTargetPlaceholder
+
 class ExceptionMatch(ast.AST):
     _attributes = ()
     _fields = ("value",)
@@ -93,13 +99,24 @@ class ComprehensionBody(ast.AST):
         self.value = value
 
 
+def unparse_ComprehensionBody(self, node):
+    """Produced by LIST_APPEND or SET_ADD and unparsed as collection.append/add(value)"""
+    self.fill()
+    self.write("append/add(")
+    self.dispatch(node.value)
+    self.write(")")
+
+Unparser._ComprehensionBody = unparse_ComprehensionBody
+
 
 class Node:
     def __init__(self, code: CodeType, op_idx: int, offset: int, opname: str, arg: int):
         # Two choices when walking the graph, either go to the next node or
         # jump to a different node in case of a (un)conditional jump
         self.next: Optional[Node] = None
+        self.next_is_virtual: bool = False
         self.jumps: Set[Node] = set()
+        self.virtual = None
 
         # Previous nodes
         self.prev: Set[Node] = set()
@@ -130,9 +147,12 @@ class Node:
 
     def add_stmt(self, stmt):
         debug("Add stmt", self, ":", stmt)
-        debug(
-            textwrap.indent(astunparse.unparse(ast.fix_missing_locations(stmt)), "  ")
-        )
+        try:
+            debug(
+                textwrap.indent(astunparse.unparse(ast.fix_missing_locations(stmt)), "  ")
+            )
+        except:
+            warn("Could not unparse", stmt, "in", self)
         self.stmts.append(stmt)
 
     def add_stack(self, item):
@@ -157,8 +177,8 @@ class Node:
         if not (
             prev_node
             and (
-                (len(self.prev) == 1 and not prev_node.jumps)
-                or prev_node.opname in ("NOP",)
+                (len(self.prev) == 1) or # and not prev_node.jumps) or
+                prev_node.opname in ("NOP",)
             )
         ):
             debug(
@@ -182,13 +202,21 @@ class Node:
         self.jumps = {
             (self if n is prev_node else n) for n in (self.jumps | prev_node.jumps)
         }
+
+        for succ in (self.next, *self.jumps):
+            if not succ:
+                continue
+            if prev_node in succ.prev:
+                succ.prev.remove(prev_node)
+                succ.prev.add(self)
+
         self.stmts = prev_node.stmts + self.stmts
         debug("After contraction", self, "|", self.next, self.jumps, "|", self.prev)
 
         return prev_node
 
     @classmethod
-    def from_code(cls, code: CodeType):
+    def from_code(cls, code: CodeType, prune: bool = False):
         bytes = code.co_code
         offset = 0
         graph = {}
@@ -237,22 +265,68 @@ class Node:
             elif opname in (
                   "FOR_ITER",
                   "SETUP_FINALLY",
+                  "SETUP_LOOP",
             ):
                 block.next = graph[block.offset]
-                block.jumps.add(graph[block.offset + arg])
+
+                if graph[block.offset + arg].opname == "POP_BLOCK":
+                    block.jumps.add(graph[block.offset + arg + 2])
+                else:
+                    block.jumps.add(graph[block.offset + arg])
             else:
                 if block.offset in graph:
                     block.next = graph[block.offset]
+
+            if (
+                  # sys.version_info <= (3, 9)
+                  block.offset in graph
+                  and not block.next
+                  and graph[block.offset] not in block.jumps
+                  and not prune
+                  and False
+            ):
+                block.next = graph[block.offset]
+                block.next_is_virtual = True
 
             if block.next:
                 block.next.prev.add(block)
             for jump in block.jumps:
                 jump.prev.add(block)
 
+            # block.is_virtual = True
+
+        root = graph[0]
+        root = rewire_break_loop(root)
+
+        if not prune:
+            prune_virtual_edges(root)
+        # seen = set()
+        # def unset_virtual(x):
+        #     if x in seen:
+        #         return
+        #     x.is_virtual = False
+        #     #for prev in tuple(x.prev):
+        #     #    if prev.next_is_virtual and prev.next is x:
+        #     #        prev.next = None
+        #     #        x.prev.remove(prev)
+        #     #        print("Removing prev from", x, ":", prev)
+        #     seen.add(x)
+        #     if not x.is_virtual:
+        #         for n in (x.next if not x.next_is_virtual else None, *x.jumps):
+        #             if n:
+        #                 unset_virtual(n)
+        # unset_virtual(graph[0])
+
         index = 0
         sorted_nodes = []
-        for node in graph_sort(graph):
-            if node.opname == "NOP" or node.opname == "RERAISE" and node.arg == 0:
+        for node in graph_sort(root):
+            if (
+                  node.opname == "NOP" or
+                  node.opname == "RERAISE" and node.arg == 0 or
+                  node.opname == "POP_BLOCK" or
+                  node.opname == "SETUP_LOOP"
+
+            ):
                 if node.next:
                     for n in node.prev:
                         if n.next is node:
@@ -263,10 +337,19 @@ class Node:
                 node.index = index
                 index += 1
                 sorted_nodes.append(node)
+                print("NODE", node, "<<", node.prev)
 
+        graph_nodes = set(sorted_nodes)
+        for node in sorted_nodes:
+            node.prev &= graph_nodes
         #detect_loops(sorted_nodes[0])
 
-        return sorted_nodes[0]
+        root = sorted_nodes[0]
+
+        if prune:
+            root = contract_jumps(root)
+
+        return root
 
     def __repr__(self):
         return f"[{self.op_idx}]({self.opname}, {self.arg})"
@@ -305,10 +388,13 @@ class Node:
             if node in visited:
                 return
             visited.add(node)
-            source = node.to_source().split("\n")
+            try:
+                source = node.to_source().split("\n")
+            except:
+                source = ["!ERROR!"]
             max_line = max(len(line) for line in source)
             label = "\n".join([
-                f"[{node.op_idx}]{'✓' if node.visited else ''}|{len(node.stack) if node.stack else 0}☰|{len(node.prev)}↣",
+                ("~({})".format(node.virtual) if node.virtual else "") + f"[{node.op_idx}]{'✓' if node.visited else ''}|{len(node.stack) if node.stack else 0}☰|{len(node.prev)}↣",
                 #f"↺({','.join(str(i) for i in sorted(node.loops))})",
                 f"{node.opname}({node.arg_value})",
                 "------------",
@@ -319,10 +405,14 @@ class Node:
                 pos=",".join(map(str, pos)) + "!",
                 label=label,
                 fontsize=10,
+                color="red" if node is self else "black",
             )
             # positions[node] = pos
-            if node.next:
+            if node.next and not node.next_is_virtual:
                 g.add_edge(node, node.next, label="next", fontsize=10)
+                rec(node.next, (pos[0], pos[1] + 1))
+            elif node.next:
+                g.add_edge(node, node.next, label="(next)", fontsize=10, style="dashed")
                 rec(node.next, (pos[0], pos[1] + 1))
 
             for jump in node.jumps:
@@ -349,7 +439,7 @@ class Node:
                 stmt = ast.fix_missing_locations(stmt)
             except AttributeError:
                 pass
-            res.append(astunparse.unparse(stmt))
+            res.append(astunparse.unparse(stmt).strip("\n"))
         return "\n".join(res)
 
     def last_stmts(self):
@@ -366,7 +456,7 @@ class Node:
         """
         Convert the graph into an AST
         """
-        node: Node
+        root = node
 
         if node.visited or node in stop_nodes:
             return None
@@ -406,7 +496,13 @@ class Node:
                 jump = next(iter(node.jumps))
 
                 # If we don't leave any loop
-                same_context = not loop_heads or explore_until(jump, loop_heads) is loop_heads[-1]
+                loop_head = explore_until(jump, loop_heads)
+                print("LOOP HEAD", loop_head, "LOOP HEADS", loop_heads)
+                same_context = (
+                      not loop_heads
+                      or loop_head is loop_heads[-1]
+                      or loop_head is None and len(jump.prev) == 1
+                )
                 if jump.visited:
                     if same_context:
                         node.add_stmt(ast.Continue(_loop_node=jump))
@@ -415,6 +511,27 @@ class Node:
                 else:
                     if not same_context:
                         node.add_stmt(ast.Break(_loop_node=jump))
+
+                if node.next and node.next_is_virtual:
+                    next_node = node.next
+                    print("NEXT VIRTUAL NODE", node, "->", next_node, next_node.virtual)
+                    if next_node.virtual:
+                        next_node = next_node._run(
+                            stop_nodes={*stop_nodes, *node.jumps},
+                            loop_heads=loop_heads,
+                            while_fusions=while_fusions,
+                        )
+                        if next_node is None:
+                            next_node = node.next
+                    print("...NEXT VIRTUAL NODE", node, "->", next_node)
+                    node.next = None
+                    next_node.prev.discard(node)
+                    node.stmts.extend(next_node.stmts)
+                    for succ in (next_node.next, *next_node.jumps):
+                        if succ and next_node in succ.prev:
+                            succ.prev.discard(next_node)
+                            succ.prev.add(node)
+                    node.jumps |= {next_node.next, *next_node.jumps} - {None}
             elif node.opname in ("POP_JUMP_IF_TRUE", "POP_JUMP_IF_FALSE", "JUMP_IF_NOT_EXC_MATCH"):
                 if node.opname == "JUMP_IF_NOT_EXC_MATCH":
                     test = ExceptionMatch(node.pop_stack())
@@ -439,6 +556,17 @@ class Node:
                     if loop_heads
                     else None
                 )
+                # if node.opname == "POP_JUMP_IF_TRUE":
+                #     print("------!!!")
+                #     print(loop_heads)
+                #     print(
+                #         real_branch,
+                #         real_branch.jump_test,
+                #         real_branch.opname == (
+                #             "POP_JUMP_IF_FALSE" if node.opname == "POP_JUMP_IF_TRUE" else "POP_JUMP_IF_TRUE"
+                #         ),
+                #         f"{ast.dump(real_branch.jump_test)} == {ast.dump(test)}",
+                #     )
                 if (
                     real_branch
                     and real_branch.jump_test
@@ -454,6 +582,7 @@ class Node:
                     node.next.prev.discard(node)
                     node.next = None
                     node.jumps = {real_head}
+                    node.add_stmt(ast.Continue())
                     else_node.prev.remove(node)
                     real_head.prev.add(node)
                     real_branch.is_conditional_while = True
@@ -474,6 +603,9 @@ class Node:
                     assert len(meet_nodes) <= 1
 
                     before = (if_node, else_node)
+                    if_loop_head = explore_until(if_node, loop_heads) if loop_heads else None
+                    else_loop_head = explore_until(else_node, loop_heads) if loop_heads else None
+
                     if_node = if_node._run(
                         stop_nodes={*stop_nodes, *meet_nodes, node},
                         loop_heads=loop_heads,
@@ -486,13 +618,37 @@ class Node:
                     )
                     debug("IF/ELSE", node, "MEET", meet_nodes)
                     debug("IF/ELSE", node, "BEFORE succ", before, "-> AFTER succ", if_node, else_node)
+                    if DEBUG:
+                        display(node.draw())
 
-                    if_item = if_node.pop_stack() if len(if_node.stack) > len(node.stack) else None
+                    if_item = if_node.pop_stack() if if_node and len(if_node.stack) > len(node.stack) else None
                     else_item = else_node.pop_stack() if else_node and len(else_node.stack) > len(node.stack) else None
 
-                    if if_node.stmts:
+                    test_origin = get_origin(test)[0].container
+                    has_been_unparsed = False
+                    debug("IS THIS A WHILE X LOOP ?", node, "LH", loop_heads, "IF NEXT", (if_node or old_if_node).next, "IF LOOP HEAD", if_loop_head, "TEST", test_origin, "ELSE LOOP HEAD", else_loop_head)
+                    if (
+                          loop_heads
+                          and if_loop_head is loop_heads[-1]
+                          and test_origin is if_loop_head
+                          and (
+                            (if_node or old_if_node).next is if_loop_head
+                            or old_if_node.next is if_loop_head
+                          )
+                          and else_loop_head is not loop_heads[-1]
+                    ) or node.is_conditional_while:
+                        debug("THIS IS A WHILE X LOOP", node, "LOOP HEAD", if_loop_head)
+                        # while node.contract_backward():
+                        #     print("NODE IS CONTRACTED", node, "==?", if_node.next)
+                        #     if DEBUG:
+                        #         display(node.draw())
+                        #     pass
+                        body_stmts = if_node.stmts if if_node else []
+                        if isinstance(body_stmts[-1], ast.Continue):
+                            body_stmts = body_stmts[:-1]
+                        body_stmts = body_stmts or [ast.Pass()]
                         node.add_stmt(
-                            ast.If(
+                            ast.While(
                                 test=(
                                     test
                                     if node.opname != "POP_JUMP_IF_TRUE"
@@ -501,31 +657,64 @@ class Node:
                                         operand=test,
                                     )
                                 ),
-                                body=if_node.stmts if if_node else [],
-                                orelse=(
-                                    else_node.stmts if else_node
-                                    else [] if not loop_heads or explore_until(old_else_node, loop_heads) is loop_heads[-1]
-                                    #else [ast.Break(_loop_node=get_origin(test)[0])]
-                                    else [ast.Break()]
-                                ),
+                                body=body_stmts,
+                                orelse=[],
+                                _loop_head=if_loop_head,
                             )
                         )
-                    if if_item:
-                        ternary_expr = ast.IfExp(
-                            test=(
-                                test
-                                if node.opname == "POP_JUMP_IF_FALSE"
-                                else ast.UnaryOp(
-                                    op=ast.Not(),
-                                    operand=test,
+                        if else_node and else_node.stmts and not isinstance(else_node.stmts[-1], ast.Break):
+                            node.stmts.extend(else_node.stmts)
+                        if_node.next.prev.discard(if_node)
+                        if_node.next = None
+                        has_been_unparsed = True
+                    if not has_been_unparsed:
+                        if if_item is None or not if_node or if_node.stmts:
+                            body_stmts = (
+                                if_node.stmts if if_node and if_node.stmts
+                                else [ast.Continue() if loop_heads and old_if_node is loop_heads[-1] else ast.Pass()] if not loop_heads or if_loop_head in (loop_heads[-1], None)
+                                #else [ast.Break(_loop_node=get_origin(test)[0])]
+                                else [ast.Break(_loop_node=if_loop_head)]
+                            )
+                            orelse_stmts = (
+                                else_node.stmts if else_node and else_node.stmts
+                                else [] if meet_nodes or not loop_heads or else_loop_head is loop_heads[-1]
+                                else [ast.Break(_loop_node=else_loop_head)]  # if loop_heads and else_loop_head is None and len((else_node or old_else_node).prev) <= 1
+                                # else [ast.Break(_loop_node=get_origin(test)[0])]
+                                # else [ast.Break()]
+                            )
+                            has_else = bool(meet_nodes) or else_loop_head is not None
+                            node.add_stmt(
+                                ast.If(
+                                    test=(
+                                        test
+                                        if node.opname != "POP_JUMP_IF_TRUE"
+                                        else ast.UnaryOp(
+                                            op=ast.Not(),
+                                            operand=test,
+                                        )
+                                    ),
+                                    body=body_stmts,
+                                    orelse=orelse_stmts if has_else else []
                                 )
-                            ),
-                            body=if_item,
-                            orelse=else_item,
-                        )
-                        #for item in if_node.stack:
-                        #    node.add_stack(item)
-                        node.add_stack(ternary_expr)
+                            )
+                            if not has_else:
+                                node.stmts.extend(orelse_stmts)
+                        if if_item:
+                            ternary_expr = ast.IfExp(
+                                test=(
+                                    test
+                                    if node.opname == "POP_JUMP_IF_FALSE"
+                                    else ast.UnaryOp(
+                                        op=ast.Not(),
+                                        operand=test,
+                                    )
+                                ),
+                                body=if_item,
+                                orelse=else_item,
+                            )
+                            #for item in if_node.stack:
+                            #    node.add_stack(item)
+                            node.add_stack(ternary_expr)
 
                     # noinspection PyTypeChecker
                     successors: Set[Node] = {
@@ -535,11 +724,11 @@ class Node:
                         None
                     }  # type: ignore
                     discarded_successors = {
-                        n for n in (if_node, else_node, old_if_node, old_else_node)
+                        n for n in (if_node, else_node)
                         if n and n.visited
                     }
-                    debug("IF SUCC", successors, "-", discarded_successors)
-                    debug("IF PREV", node.prev)
+                    debug("IF/ELSE SUCC BEFORE CONTRACT", successors, "-", discarded_successors)
+                    debug("IF/ELSE PREV BEFORE CONTRACT", node.prev)
                     successors = successors - discarded_successors
 
                     jump_nodes = successors
@@ -555,6 +744,8 @@ class Node:
                     node.next = None
                     node.jumps = jump_nodes
                     debug("IF/ELSE", node, node.stack)
+                    debug("IF/ELSE SUCC AFTER CONTRACT", successors)
+                    debug("IF/ELSE PREV AFTER CONTRACT", node.prev, "prevs successor:", [(n.next, *n.jumps) for n in node.prev])
 
                     if DEBUG:
                         display(node.draw())
@@ -576,6 +767,7 @@ class Node:
                 pass
             elif node.opname == "FOR_ITER":
                 old_body_node = body_node = node.next
+                (jump_node,) = node.jumps
 
                 iter_item = node.pop_stack()
                 iter_item._dumped = True
@@ -586,19 +778,25 @@ class Node:
 
                 body_node.stack = [*node.stack, iter_item, placeholder]
                 body_node = body_node._run(
-                    stop_nodes={*stop_nodes, node},
+                    stop_nodes={*stop_nodes, node, jump_node},
                     loop_heads=loop_heads,
                     while_fusions=while_fusions,
                 )
+                body_loop_head = explore_until(body_node, (node, jump_node, *stop_nodes))
+                debug("FOR LOOP HEAD", body_loop_head)
                 debug("BODY", [ast.dump(x) for x in body_node.stmts])
                 target = body_node.stmts.pop(0).targets[0]
 
+                body_stmts = (
+                    body_node.stmts if body_node else []
+                ) + ([ast.Break()] if body_loop_head is not node else [])
                 node.add_stmt(
                     ast.For(
                         target=target,
                         iter=iter_item,
-                        body=body_node.stmts if body_node else [],
+                        body=body_stmts,
                         orelse=[],  # TODO
+                        _loop_head=loop_heads[-1] if loop_heads else None,
                     )
                 )
                 successors = {body_node.next, *body_node.jumps, *node.jumps} - {None}
@@ -700,7 +898,7 @@ class Node:
                 for _ in range(node.arg):
                     values.append(node.pop_stack())
                     keys.append(node.pop_stack())
-                node.add_stack(ast.Dict(keys, values))
+                node.add_stack(ast.Dict(keys[::-1], values[::-1]))
             elif node.opname == "LIST_TO_TUPLE":
                 value = node.pop_stack()
                 node.add_stack(ast.Tuple(value.elts))
@@ -995,6 +1193,46 @@ class Node:
                 # if node.index > 0:
                 #    node.pop_stack()
                 pass
+            elif node.opname == "SETUP_LOOP":
+                # Python 3.7
+                if False:
+                    (jump_node,) = node.jumps
+                    next_node = node.next
+                    next_node = next_node._run(
+                        stop_nodes={*stop_nodes, node, jump_node},
+                        loop_heads=loop_heads,
+                        while_fusions=while_fusions,
+                    )
+                    # Merge next_node into node -> replace every edge to next_node with node
+                    # to ode, and every edge from next_node with edge from node
+                    for prev in next_node.prev:
+                        if prev is node:
+                            continue
+                        if prev.next is next_node:
+                            prev.next = node
+                        prev.jumps = {node if x is next_node else x for x in prev.jumps}
+                    for succ in (next_node.next, *next_node.jumps):
+                        if succ:
+                            succ.prev = {node if x is next_node else x for x in succ.prev}
+
+                    node.jumps = {
+                        item for item in (next_node.next, *next_node.jumps) if item
+                    } - {jump_node}
+                    node.next = jump_node
+                    print("................. setup", node, [node.next, *node.jumps], "prev", node.prev)
+
+                    if not (len(next_node.stmts) == 1 and isinstance(next_node.stmts[0], (ast.For, ast.While))):
+                        node.stmts.append(ast.While(
+                            test=ast.Constant(value=True, kind=None),
+                            body=next_node.stmts,
+                            orelse=[],
+                        ))
+                    else:
+                        node.stmts.extend(next_node.stmts)
+            elif node.opname == "BREAK_LOOP":
+                # Python 3.7
+                raise Exception()
+                node.add_stmt(ast.Break())
             else:
                 raise NotImplementedError(node.opname)
 
@@ -1003,7 +1241,10 @@ class Node:
             debug("STACKS", "node", node, len(node.stack), node.stack, "prev", prev_visited, len(prev_visited[-1].stack) if prev_visited else 0, prev_visited[-1].stack if prev_visited else None)
             debug("LOOP HEADS", "node", node, "PREV", node.prev, "=>", loop_heads)
             while not prev_visited or len(node.stack) <= len(prev_visited[-1].stack):
-                prev = node.contract_backward()
+                if root.container is not node:
+                    prev = node.contract_backward()
+                else:
+                    prev = None
                 if not prev and not node.prev == {node}:
                     break
                 if loop_heads and loop_heads[-1] is prev:
@@ -1012,26 +1253,27 @@ class Node:
                     node.jumps.remove(node)
                     node.prev.remove(node)
 
-                    if node.is_conditional_while:
-                        assert len(node.stmts) == 1
-                        stmt = node.stmts.pop()
-                        node.add_stmt(
-                            ast.While(
-                                test=stmt.test,
-                                body=stmt.body,
-                                orelse=[],
-                            ),
+                    #if node.is_conditional_while:
+                    #    assert len(node.stmts) == 1
+                    #    stmt = node.stmts.pop()
+                    #    node.add_stmt(
+                    #        ast.While(
+                    #            test=stmt.test,
+                    #            body=stmt.body,
+                    #            orelse=[],
+                    #        ),
+                    #    )
+                    # else:
+                    body = node.stmts
+                    node.stmts = []
+                    node.add_stmt(
+                        ast.While(
+                            test=ast.Constant(value=True, kind=None),
+                            body=body,
+                            orelse=[],
+                            _loop_head=node,
                         )
-                    else:
-                        body = node.stmts
-                        node.stmts = []
-                        node.add_stmt(
-                            ast.While(
-                                test=ast.Constant(value=True, kind=None),
-                                body=body,
-                                orelse=[],
-                            )
-                        )
+                    )
 
 
                     if loop_heads and loop_heads[-1] is node:
@@ -1059,7 +1301,7 @@ class Node:
                     debug("CANDIDATE JUMPS", node, "=>", jump_to_head, "LOOP HEADS", loop_heads)
                     same_level_jumps = [
                         jump for jump, head in jump_to_head.items()
-                        if head is loop_heads[-1]
+                        if head is loop_heads[-1] or (head is None and len(jump.prev) == 1)
                     ]
                     debug("SAME LEVEL JUMPS", node, "=>", same_level_jumps, "LOOP HEADS", loop_heads)
                 else:
@@ -1068,12 +1310,29 @@ class Node:
                 if len(same_level_jumps) > 1:
                     warn("MULTIPLE CHOICE FOR JUMP", same_level_jumps)
                 if same_level_jumps:
-                    node.next = sorted(same_level_jumps, key=lambda j: j.index)[0]
+                    node.next = sorted(same_level_jumps,
+                                       key=lambda j: (0 if j.index > node.index else 1, j.index))[0]
                     node.jumps.remove(node.next)
+                # ARE WE SURE OF THIS ?
+                # If there is only one outgoing edge, jumping on a different level
+                # set it as next but don't continue exploring
+                elif len(node.jumps) == 1:
+                    node.next = next(iter(node.jumps))
+                    node.jumps.remove(node.next)
+                    #if node.is_virtual:
+                    #    node.next.prev.discard(node)
+                    print("Stop after", node, "because not same level")
+                    break
 
+            # if node.is_virtual:
+            #     for succ in node.jumps:
+            #         succ.prev.discard(node)
             if node.next and not node.next.visited and not node.next in stop_nodes:
                 node: Node = node.next
             else:
+                # if node.is_virtual and node.next:
+                #     node.next.prev.discard(node)
+                print("Stop after", node, ": next=", node.next, "is visited", node.next.visited if node.next else "-", "| stop nodes: ", stop_nodes)
                 break
 
         return node
@@ -1090,21 +1349,24 @@ class Node:
                     return ast.Continue()
                 return node
 
-        node.stmts = [WhileBreakFixer().visit(stmt) for stmt in node.stmts]
+        node.stmts = [
+            WhileBreakFixer().visit(RemoveLastContinue().visit(stmt))
+            for stmt in node.stmts
+        ]
 
         return node
 
 
-def decompile(code: CodeType) -> str:
+def decompile(code: CodeType, prune: bool=False) -> str:
     """Decompile a code object"""
-    node = Node.from_code(code)
+    node = Node.from_code(code, prune=prune)
     if DEBUG:
+        print("DECOMPILE", node)
         display(node.draw())
     return node.run().to_source()
 
 
 def detect_first_node(root):
-
     visited = set()
 
     best = root
@@ -1130,7 +1392,10 @@ def detect_first_node(root):
     return best
 
 def explore_until(root, stops):
+    if not stops:
+        return None
 
+    stops = list(stops)
     visited = set()
 
     def rec(node):
@@ -1142,16 +1407,16 @@ def explore_until(root, stops):
 
         visited.add(node)
 
-        for succ in (node.next, *node.jumps):
-            if succ is None:
-                continue
-            res = rec(succ)
-            if res:
-                return res
-
-        return None
+        results = [
+            rec(succ)
+            for succ in (node.next, *node.jumps)
+            if succ is not None
+        ]
+        res = min(filter(bool, results), key=stops.index, default=None)
+        return res
 
     return rec(root)
+
 
 def process_binding_(node, save_origin=True):
     # assert len(block.pred) <= 1
@@ -1421,3 +1686,179 @@ def process_try_(node, loop_heads, stop_nodes, while_fusions):
 
     if DEBUG:
         display(node.draw())
+
+
+class RemoveLastContinue(ast.NodeTransformer):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.can_remove_continue = False
+        self.current_loops = []
+
+    def generic_visit(self, node):
+        for field, old_value in ast.iter_fields(node):
+            if field in ("body", "orelse") and isinstance(old_value, list):
+                new_body = []
+                last_val = self.can_remove_continue
+                for last_in_body, split in [
+                    (False, old_value[:-1]),
+                    (True, old_value[-1:]),
+                ]:
+                    self.can_remove_continue = (
+                          (isinstance(node, (ast.For, ast.While)) or last_val)
+                          and last_in_body
+                          and not (len(old_value) == 1 and isinstance(old_value[0], ast.Continue))
+                    )
+                    for value in split:
+                        if isinstance(value, ast.AST):
+                            value = self.visit(value)
+                            if value is None:
+                                continue
+                            elif not isinstance(value, ast.AST):
+                                new_body.extend(value)
+                                continue
+                        new_body.append(value)
+                self.can_remove_continue = last_val
+                old_value[:] = new_body
+            elif isinstance(old_value, list):
+                new_values = []
+                for value in old_value:
+                    if isinstance(value, ast.AST):
+                        value = self.visit(value)
+                        if value is None:
+                            continue
+                        elif not isinstance(value, ast.AST):
+                            new_values.extend(value)
+                            continue
+                    new_values.append(value)
+                old_value[:] = new_values
+            elif isinstance(old_value, ast.AST):
+                new_node = self.visit(old_value)
+                if new_node is None:
+                    delattr(node, field)
+                else:
+                    setattr(node, field, new_node)
+        return node
+
+    #def visit_Break(self, node):
+    #    print("BREAK", node._loop_node)
+    #    if not self.current_loops:
+    #        return None
+    #    if node._loop_node is self.current_loops[-1]:
+    #        if self.can_remove_continue:
+    #            return None
+    #        else:
+    #            return ast.Continue()
+    #    elif node._loop_node in self.current_loops:
+    #        return ast.Break()
+    #    return None
+#
+    #def visit_While(self, node):
+    #    print("WHILE", node._loop_head)
+    #    self.current_loops.append(node)
+    #    result = self.generic_visit(node)
+    #    self.current_loops.pop()
+    #    return result
+#
+    #def visit_For(self, node):
+    #    print("FOR", node._loop_head)
+    #    self.current_loops.append(node)
+    #    result = self.generic_visit(node)
+    #    self.current_loops.pop()
+    #    return result
+
+    def visit_Continue(self, node):
+        if self.can_remove_continue:
+            return None
+        return node
+
+
+def prune_virtual_edges(root):
+    queue = [(root, 0)]
+    graph = set()
+
+    while queue:
+        node, level = queue.pop(0)
+        graph.add(node)
+
+        if node.virtual is None:
+            node.virtual = level
+        else:
+            new_level = min(node.virtual, level)
+            if new_level == node.virtual:
+                continue
+            node.virtual = new_level
+        if node.next and node.next_is_virtual:
+            queue.append((node.next, level + 1))
+        elif node.next:
+            queue.append((node.next, level))
+        for succ in node.jumps:
+            queue.append((succ, level))
+
+    for node in graph:
+        for prev in tuple(node.prev):
+            if prev.virtual and node.virtual and prev.virtual > node.virtual and prev.next is node:
+                node.prev.discard(prev)
+                prev.next = None
+            if prev.virtual and node.virtual and prev.virtual and prev.virtual == node.virtual and prev.next_is_virtual and prev.next is node:
+                node.prev.discard(prev)
+                prev.next = None
+
+
+def contract_jumps(root):
+    queue = [root]
+    seen = set()
+
+    while queue:
+        node = queue.pop(0)
+
+        seen.add(node)
+
+        if node.opname in ("JUMP_FORWARD", "JUMP_ABSOLUTE"):
+            (jump_node,) = node.jumps
+            root = jump_node if root is node else root
+            for prev in node.prev:
+                if prev.next is node:
+                    prev.next = jump_node
+                prev.jumps = {jump_node if x is node else x for x in prev.jumps}
+            jump_node.prev = (jump_node.prev - {node}) | node.prev
+        else:
+            pass
+
+        for succ in (node.next, *node.jumps):
+            if succ not in seen and succ:
+                queue.append(succ)
+
+    return root
+
+
+def rewire_break_loop(root):
+    queue = [(root, [])]
+    seen = set()
+
+    while queue:
+        node, loop_jumps = queue.pop(0)
+        if not node or node in seen:
+            continue
+        seen.add(node)
+        if node.opname == "SETUP_LOOP":
+            #jump_node = next(iter(node.jumps))
+            jump_node = node.jumps.pop()
+            jump_node.prev.discard(node)
+            queue.append((node.next, [*loop_jumps, jump_node]))
+            queue.append((jump_node, loop_jumps))
+        elif node.opname == "BREAK_LOOP":
+            node.opname = "JUMP_ABSOLUTE"
+            #node.next_is_virtual = True
+            if node.next:
+                node.next.prev.discard(node)
+                node.next = None
+            node.arg = None
+            loop_jumps[-1].prev.add(node)
+            node.jumps = {loop_jumps[-1]}
+            queue.append((node.next, loop_jumps))
+        else:
+            queue.append((node.next, loop_jumps))
+            for jump in node.jumps:
+                queue.append((jump, loop_jumps))
+
+    return root
