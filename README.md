@@ -4,7 +4,7 @@
 
 ## Overview
 
-`pygetsource` is a Python decompiler. When Python reads code, it first converts the instructions into bytecode. For instance:
+When Python reads code, it first converts the instructions into bytecode. For instance:
 
 ```python
 a = 2
@@ -17,7 +17,7 @@ LOAD_CONST 1
 STORE_FAST 0
 ```
 
-The latter form is typically stored in `.pyc` files and in the `__code__` attribute of function objects. `pygetsource's goal is to reverse this process.
+The latter form is typically stored in `.pyc` files and in the `__code__` attribute of function objects. The goal of `pygetsource` is to reverse this process.
 
 The project takes its name from the `inspect.getsource` function, which returns the source code of a function, but it is not always applicable, as explained above.
 
@@ -87,13 +87,14 @@ It is also licensed under a copyleft GPL license, making it less suitable for la
 
 ## How does it work ?
 
-`pygetsource` uses a distinct approach. The bytecode instructions are initially converted into a directed graph, representing the program's flow. This graph is then iteratively reduced, processing each node based on its opcode, argument, and position. This method allows us to rely more on high-level patterns and less on Python’s idiosyncrasies when recreating complex structures like nested loops or break/return statements.
+`pygetsource` uses a distinct approach. The bytecode instructions are initially converted into a directed graph, representing the program's flow. This graph is then iteratively reduced, processing each node based on its opcode, argument, and position and generating the [AST](https://docs.python.org/3/library/ast.html) as it goes.
+This method allows us to rely more on high-level patterns and less on Python’s idiosyncrasies when recreating complex structures like nested loops or break/return statements.
+In constrast with [uncompyle6](https://github.com/rocky/python-uncompyle6) and [pycdc](https://github.com/zrax/pycdc), `pygetsource` uses the `ast` and `astunparse` libraries to generate the source code from the generated AST.
 
 Here is an example of a graph being reduced:
 
 ![Graph reduction](./docs/graph-example.svg)
 
-`pygetsource` uses the `ast` and `astunparse` libraries to generate the source code, instead of creating this functionality from scratch.
 
 Finally, this software is distributed under the permissive MIT license, making it ideal for use as a dependency in larger projects.
 
@@ -105,4 +106,18 @@ If we recompile the generated program, we can compare the two sets of bytecode i
 
 Instead, `pygetsource` compares the graph of the original code object with the graph of the recovered code object, after a pruning step. During this step, no-op codes are removed, jump instructions are pruned (while maintaining edges between source and target nodes), and dead-code is eliminated.
 
+## Contributing
 
+Contributions are welcome. Feel free to open an issue or submit a pull request. Any issues related to the decompilation process should include version of the Python interpreter used to generate the bytecode, the source code of the function, and the bytecode instructions as printed by `dis.dis(code)`.
+
+To install the project in development mode, clone the repository and run `pip install -e '.[dev]'` in the root directory. You can then run the tests using `pytest`. Make sure to have `graphviz` installed first. If you're on MacOS and have trouble with the Python `pygraphviz` package, try installing it using the following command:
+
+```bash
+pip install \
+    --global-option=build_ext \
+    --global-option="-I$(brew --prefix graphviz)/include/" \
+    --global-option="-L$(brew --prefix graphviz)/lib/" \
+    pygraphviz
+```
+
+To inspect a failure case, use the `debug=True` parameter of the `getsource` function. This will display the graph at different stages of the reduction process, as well as various debug information.
