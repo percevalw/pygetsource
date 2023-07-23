@@ -128,7 +128,6 @@ class RewriteComprehensionArgs(ast.NodeTransformer):
             )
 
 
-
 class RemoveLastContinue(ast.NodeTransformer):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

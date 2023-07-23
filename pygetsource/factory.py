@@ -1,7 +1,8 @@
 import inspect
 import textwrap
+from types import CodeType
 
-from pygetsource.decompiler import decompile
+from pygetsource.decompiler import getsource
 
 
 def reconstruct_arguments_str(code):
@@ -19,8 +20,34 @@ def reconstruct_arguments_str(code):
     return ", ".join(sig)
 
 
-def get_factory_code(code):
-    function_body = decompile(code)
+def getfactory(code: CodeType) -> str:
+    """
+    Get the source code for a factory function to rebuild an equivalent code object
+    with closures, linked globals, etc.
+
+    Parameters
+    ----------
+    code: CodeType
+        The code object to decompile
+
+    Examples
+    --------
+
+    Use as follows:
+
+    ```python
+    source_code = getfactory(code_object)
+    res = {}
+    exec(source_code, res, res)
+    recompiled: Callable = res["_fn_"]
+    ```
+
+    Returns
+    -------
+    str
+        The string for the function to evaluate and execute
+    """
+    function_body = getsource(code)
 
     function_name = "_fn_"
     def_str = "def"

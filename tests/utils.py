@@ -4,7 +4,7 @@ from types import CodeType
 from typing import Callable
 
 from pygetsource import Node
-from pygetsource.factory import get_factory_code
+from pygetsource.factory import getfactory
 from pygetsource.utils import hasjabs
 
 
@@ -43,10 +43,8 @@ def prune_and_compare(code1: CodeType, code2: CodeType):
 
 def make_test_idem(func):
     def test():
-        source_code = get_factory_code(func.__code__)
+        source_code = getfactory(func.__code__)
         res = {}
-        print("SOURCE")
-        print(source_code)
         exec(source_code, res, res)
         recompiled: Callable = res["_fn_"]
         tgt_codes = func.__code__, *(c for c in func.__code__.co_consts if isinstance(c, CodeType))
