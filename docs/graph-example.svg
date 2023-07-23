@@ -1,0 +1,184 @@
+<svg font-family="Menlo, Consolas, Courier New, Lucida Console, Monaco, Ubuntu Mono, Source Code Pro, monospace" width="1620pt" height="196pt" viewBox="0.00 0.00 1620.00 195.50" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<g id="graph0" class="graph" transform="scale(1 1) rotate(0) translate(4 191.5)">
+<polygon fill="white" stroke="none" points="-4,4 -4,-191.5 1616,-191.5 1616,4 -4,4"></polygon>
+<!-- [2](STORE_FAST, 0) -->
+<g id="node1" class="node">
+<title>[2](STORE_FAST, 0)</title>
+<polygon fill="none" stroke="black" points="94,-100.5 0,-100.5 0,-41.5 94,-41.5 94,-100.5"></polygon>
+<text text-anchor="middle" x="47" y="-87" font-size="10.00">[2]✓|0☰|0↣</text>
+<text text-anchor="middle" x="47" y="-74.25" font-size="10.00">STORE_FAST(a)</text>
+<text text-anchor="middle" x="47" y="-61.5" font-size="10.00">------------</text>
+<text text-anchor="middle" x="47" y="-48.75" font-size="10.00">a = 1</text>
+</g>
+<!-- [6](LOAD_GLOBAL, 0) -->
+<g id="node2" class="node">
+<title>[6](LOAD_GLOBAL, 0)</title>
+<polygon fill="none" stroke="black" points="254,-94.12 154,-94.12 154,-47.88 254,-47.88 254,-94.12"></polygon>
+<text text-anchor="middle" x="204" y="-80.62" font-size="10.00">[6]✓|1☰|2↣</text>
+<text text-anchor="middle" x="204" y="-67.88" font-size="10.00">LOAD_GLOBAL(x)</text>
+<text text-anchor="middle" x="204" y="-55.12" font-size="10.00">------------</text>
+</g>
+<!-- [2](STORE_FAST, 0)&#45;&gt;[6](LOAD_GLOBAL, 0) -->
+<g id="edge1" class="edge">
+<title>[2](STORE_FAST, 0)-&gt;[6](LOAD_GLOBAL, 0)</title>
+<path fill="none" stroke="black" d="M94.09,-71C109.31,-71 126.49,-71 142.62,-71"></path>
+<polygon fill="black" stroke="black" points="142.58,-74.5 152.58,-71 142.58,-67.5 142.58,-74.5"></polygon>
+<text text-anchor="middle" x="124" y="-74.25" font-size="10.00">next</text>
+</g>
+<!-- [8](POP_JUMP_IF_FALSE, 12) -->
+<g id="node3" class="node">
+<title>[8](POP_JUMP_IF_FALSE, 12)</title>
+<polygon fill="none" stroke="red" points="456,-132.12 314,-132.12 314,-85.88 456,-85.88 456,-132.12"></polygon>
+<text text-anchor="middle" x="385" y="-118.62" font-size="10.00">[8]✓|0☰|1↣</text>
+<text text-anchor="middle" x="385" y="-105.88" font-size="10.00">POP_JUMP_IF_FALSE(12)</text>
+<text text-anchor="middle" x="385" y="-93.12" font-size="10.00">------------</text>
+</g>
+<!-- [6](LOAD_GLOBAL, 0)&#45;&gt;[8](POP_JUMP_IF_FALSE, 12) -->
+<g id="edge2" class="edge">
+<title>[6](LOAD_GLOBAL, 0)-&gt;[8](POP_JUMP_IF_FALSE, 12)</title>
+<path fill="none" stroke="black" d="M254.39,-81.48C269.55,-84.7 286.66,-88.34 303.35,-91.88"></path>
+<polygon fill="black" stroke="black" points="302.16,-95.42 312.67,-94.07 303.62,-88.57 302.16,-95.42"></polygon>
+<text text-anchor="middle" x="284" y="-93.25" font-size="10.00">next</text>
+</g>
+<!-- [10](JUMP_ABSOLUTE, None) -->
+<g id="node4" class="node">
+<title>[10](JUMP_ABSOLUTE, None)</title>
+<polygon fill="none" stroke="black" points="652,-187.5 522,-187.5 522,-128.5 652,-128.5 652,-187.5"></polygon>
+<text text-anchor="middle" x="587" y="-174" font-size="10.00">[10]✓|0☰|1↣</text>
+<text text-anchor="middle" x="587" y="-161.25" font-size="10.00">JUMP_ABSOLUTE(None)</text>
+<text text-anchor="middle" x="587" y="-148.5" font-size="10.00">------------</text>
+<text text-anchor="middle" x="587" y="-135.75" font-size="10.00">break</text>
+</g>
+<!-- [8](POP_JUMP_IF_FALSE, 12)&#45;&gt;[10](JUMP_ABSOLUTE, None) -->
+<g id="edge3" class="edge">
+<title>[8](POP_JUMP_IF_FALSE, 12)-&gt;[10](JUMP_ABSOLUTE, None)</title>
+<path fill="none" stroke="black" d="M456.23,-126.21C474.01,-130.56 493.18,-135.26 511.18,-139.67"></path>
+<polygon fill="black" stroke="black" points="510.08,-143.25 520.62,-142.23 511.74,-136.45 510.08,-143.25"></polygon>
+<text text-anchor="middle" x="486" y="-139.25" font-size="10.00">next</text>
+</g>
+<!-- [14](POP_JUMP_IF_FALSE, 20) -->
+<g id="node5" class="node">
+<title>[14](POP_JUMP_IF_FALSE, 20)</title>
+<polygon fill="none" stroke="black" points="658,-110 516,-110 516,0 658,0 658,-110"></polygon>
+<text text-anchor="middle" x="587" y="-96.5" font-size="10.00">[14]✓|0☰|1↣</text>
+<text text-anchor="middle" x="587" y="-83.75" font-size="10.00">POP_JUMP_IF_FALSE(20)</text>
+<text text-anchor="middle" x="587" y="-71" font-size="10.00">------------</text>
+<text text-anchor="middle" x="587" y="-58.25" font-size="10.00">if u: &#160;&#160;&#160;&#160;&#160;&#160;</text>
+<text text-anchor="middle" x="587" y="-45.5" font-size="10.00"> &#160;&#160;&#160;break &#160;&#160;</text>
+<text text-anchor="middle" x="587" y="-32.75" font-size="10.00">else: &#160;&#160;&#160;&#160;&#160;&#160;</text>
+<text text-anchor="middle" x="587" y="-20" font-size="10.00"> &#160;&#160;&#160;c = 2 &#160;&#160;</text>
+<text text-anchor="middle" x="587" y="-7.25" font-size="10.00"> &#160;&#160;&#160;continue</text>
+</g>
+<!-- [8](POP_JUMP_IF_FALSE, 12)&#45;&gt;[14](POP_JUMP_IF_FALSE, 20) -->
+<g id="edge4" class="edge">
+<title>[8](POP_JUMP_IF_FALSE, 12)-&gt;[14](POP_JUMP_IF_FALSE, 20)</title>
+<path fill="none" stroke="black" d="M456.23,-90.04C472.02,-85.77 488.9,-81.22 505.08,-76.85"></path>
+<polygon fill="black" stroke="black" points="505.86,-79.99 514.6,-74.01 504.03,-73.24 505.86,-79.99"></polygon>
+<text text-anchor="middle" x="486" y="-89.25" font-size="10.00">jump</text>
+</g>
+<!-- [28](LOAD_CONST, 2) -->
+<g id="node6" class="node">
+<title>[28](LOAD_CONST, 2)</title>
+<polygon fill="none" stroke="black" points="812,-129.12 718,-129.12 718,-82.88 812,-82.88 812,-129.12"></polygon>
+<text text-anchor="middle" x="765" y="-115.62" font-size="10.00">[28]|0☰|2↣</text>
+<text text-anchor="middle" x="765" y="-102.88" font-size="10.00">LOAD_CONST(2)</text>
+<text text-anchor="middle" x="765" y="-90.12" font-size="10.00">------------</text>
+</g>
+<!-- [10](JUMP_ABSOLUTE, None)&#45;&gt;[28](LOAD_CONST, 2) -->
+<g id="edge5" class="edge">
+<title>[10](JUMP_ABSOLUTE, None)-&gt;[28](LOAD_CONST, 2)</title>
+<path fill="none" stroke="black" d="M652.04,-139.08C670.2,-133.71 689.83,-127.91 707.5,-122.69"></path>
+<polygon fill="black" stroke="black" points="708.06,-125.88 716.66,-119.69 706.08,-119.17 708.06,-125.88"></polygon>
+<text text-anchor="middle" x="688" y="-135.25" font-size="10.00">next</text>
+</g>
+<!-- [14](POP_JUMP_IF_FALSE, 20)&#45;&gt;[6](LOAD_GLOBAL, 0) -->
+<g id="edge11" class="edge">
+<title>[14](POP_JUMP_IF_FALSE, 20)-&gt;[6](LOAD_GLOBAL, 0)</title>
+<path fill="none" stroke="black" d="M515.53,-56.86C460.61,-58.44 382.43,-60.97 314,-64.25 298.15,-65.01 281.02,-65.99 265.13,-66.98"></path>
+<polygon fill="black" stroke="black" points="265.12,-63.53 255.36,-67.65 265.56,-70.52 265.12,-63.53"></polygon>
+<text text-anchor="middle" x="385" y="-68.25" font-size="10.00">next</text>
+</g>
+<!-- [14](POP_JUMP_IF_FALSE, 20)&#45;&gt;[28](LOAD_CONST, 2) -->
+<g id="edge12" class="edge">
+<title>[14](POP_JUMP_IF_FALSE, 20)-&gt;[28](LOAD_CONST, 2)</title>
+<path fill="none" stroke="black" d="M658.32,-75.38C674.5,-80.07 691.51,-85 707.05,-89.5"></path>
+<polygon fill="black" stroke="black" points="705.96,-93.11 716.54,-92.54 707.9,-86.39 705.96,-93.11"></polygon>
+<text text-anchor="middle" x="688" y="-90.25" font-size="10.00">jump</text>
+</g>
+<!-- [30](STORE_FAST, 0) -->
+<g id="node7" class="node">
+<title>[30](STORE_FAST, 0)</title>
+<polygon fill="none" stroke="black" points="966,-129.12 872,-129.12 872,-82.88 966,-82.88 966,-129.12"></polygon>
+<text text-anchor="middle" x="919" y="-115.62" font-size="10.00">[30]|0☰|1↣</text>
+<text text-anchor="middle" x="919" y="-102.88" font-size="10.00">STORE_FAST(a)</text>
+<text text-anchor="middle" x="919" y="-90.12" font-size="10.00">------------</text>
+</g>
+<!-- [28](LOAD_CONST, 2)&#45;&gt;[30](STORE_FAST, 0) -->
+<g id="edge6" class="edge">
+<title>[28](LOAD_CONST, 2)-&gt;[30](STORE_FAST, 0)</title>
+<path fill="none" stroke="black" d="M812.43,-106C827.68,-106 844.82,-106 860.77,-106"></path>
+<polygon fill="black" stroke="black" points="860.59,-109.5 870.59,-106 860.59,-102.5 860.59,-109.5"></polygon>
+<text text-anchor="middle" x="842" y="-109.25" font-size="10.00">next</text>
+</g>
+<!-- [32](LOAD_CONST, 3) -->
+<g id="node8" class="node">
+<title>[32](LOAD_CONST, 3)</title>
+<polygon fill="none" stroke="black" points="1120,-129.12 1026,-129.12 1026,-82.88 1120,-82.88 1120,-129.12"></polygon>
+<text text-anchor="middle" x="1073" y="-115.62" font-size="10.00">[32]|0☰|1↣</text>
+<text text-anchor="middle" x="1073" y="-102.88" font-size="10.00">LOAD_CONST(3)</text>
+<text text-anchor="middle" x="1073" y="-90.12" font-size="10.00">------------</text>
+</g>
+<!-- [30](STORE_FAST, 0)&#45;&gt;[32](LOAD_CONST, 3) -->
+<g id="edge7" class="edge">
+<title>[30](STORE_FAST, 0)-&gt;[32](LOAD_CONST, 3)</title>
+<path fill="none" stroke="black" d="M966.43,-106C981.68,-106 998.82,-106 1014.77,-106"></path>
+<polygon fill="black" stroke="black" points="1014.59,-109.5 1024.59,-106 1014.59,-102.5 1014.59,-109.5"></polygon>
+<text text-anchor="middle" x="996" y="-109.25" font-size="10.00">next</text>
+</g>
+<!-- [34](STORE_FAST, 2) -->
+<g id="node9" class="node">
+<title>[34](STORE_FAST, 2)</title>
+<polygon fill="none" stroke="black" points="1274,-129.12 1180,-129.12 1180,-82.88 1274,-82.88 1274,-129.12"></polygon>
+<text text-anchor="middle" x="1227" y="-115.62" font-size="10.00">[34]|0☰|1↣</text>
+<text text-anchor="middle" x="1227" y="-102.88" font-size="10.00">STORE_FAST(b)</text>
+<text text-anchor="middle" x="1227" y="-90.12" font-size="10.00">------------</text>
+</g>
+<!-- [32](LOAD_CONST, 3)&#45;&gt;[34](STORE_FAST, 2) -->
+<g id="edge8" class="edge">
+<title>[32](LOAD_CONST, 3)-&gt;[34](STORE_FAST, 2)</title>
+<path fill="none" stroke="black" d="M1120.43,-106C1135.68,-106 1152.82,-106 1168.77,-106"></path>
+<polygon fill="black" stroke="black" points="1168.59,-109.5 1178.59,-106 1168.59,-102.5 1168.59,-109.5"></polygon>
+<text text-anchor="middle" x="1150" y="-109.25" font-size="10.00">next</text>
+</g>
+<!-- [36](LOAD_CONST, 0) -->
+<g id="node10" class="node">
+<title>[36](LOAD_CONST, 0)</title>
+<polygon fill="none" stroke="black" points="1446,-129.12 1334,-129.12 1334,-82.88 1446,-82.88 1446,-129.12"></polygon>
+<text text-anchor="middle" x="1390" y="-115.62" font-size="10.00">[36]|0☰|1↣</text>
+<text text-anchor="middle" x="1390" y="-102.88" font-size="10.00">LOAD_CONST(None)</text>
+<text text-anchor="middle" x="1390" y="-90.12" font-size="10.00">------------</text>
+</g>
+<!-- [34](STORE_FAST, 2)&#45;&gt;[36](LOAD_CONST, 0) -->
+<g id="edge9" class="edge">
+<title>[34](STORE_FAST, 2)-&gt;[36](LOAD_CONST, 0)</title>
+<path fill="none" stroke="black" d="M1274.14,-106C1289.38,-106 1306.65,-106 1323.08,-106"></path>
+<polygon fill="black" stroke="black" points="1322.73,-109.5 1332.73,-106 1322.73,-102.5 1322.73,-109.5"></polygon>
+<text text-anchor="middle" x="1304" y="-109.25" font-size="10.00">next</text>
+</g>
+<!-- [38](RETURN_VALUE, 0) -->
+<g id="node11" class="node">
+<title>[38](RETURN_VALUE, 0)</title>
+<polygon fill="none" stroke="black" points="1612,-129.12 1506,-129.12 1506,-82.88 1612,-82.88 1612,-129.12"></polygon>
+<text text-anchor="middle" x="1559" y="-115.62" font-size="10.00">[38]|0☰|1↣</text>
+<text text-anchor="middle" x="1559" y="-102.88" font-size="10.00">RETURN_VALUE(0)</text>
+<text text-anchor="middle" x="1559" y="-90.12" font-size="10.00">------------</text>
+</g>
+<!-- [36](LOAD_CONST, 0)&#45;&gt;[38](RETURN_VALUE, 0) -->
+<g id="edge10" class="edge">
+<title>[36](LOAD_CONST, 0)-&gt;[38](RETURN_VALUE, 0)</title>
+<path fill="none" stroke="black" d="M1446.14,-106C1461.74,-106 1478.83,-106 1494.85,-106"></path>
+<polygon fill="black" stroke="black" points="1494.75,-109.5 1504.75,-106 1494.75,-102.5 1494.75,-109.5"></polygon>
+<text text-anchor="middle" x="1476" y="-109.25" font-size="10.00">next</text>
+</g>
+</g>
+</svg>
