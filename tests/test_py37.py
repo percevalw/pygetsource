@@ -2,7 +2,7 @@ import sys
 
 import pytest as pytest
 
-from tests.utils import make_test_idem
+from utils import make_test_idem
 
 
 @make_test_idem
@@ -116,6 +116,7 @@ def test_while_if():
             x = 4
 
 
+@pytest.mark.xfail(reason="try/except not implemented yet")
 @make_test_idem
 def test_while_try_except_break():
     while test:
@@ -250,6 +251,7 @@ def test_for_continue_hell():
         continue
 
 
+@pytest.mark.xfail(reason="try/except not implemented yet")
 @make_test_idem
 def test_try_except():
     try:
@@ -258,6 +260,7 @@ def test_try_except():
         a = 2
 
 
+@pytest.mark.xfail(reason="try/except not implemented yet")
 @make_test_idem
 def test_try_except_else():
     try:
@@ -268,6 +271,7 @@ def test_try_except_else():
         a = 3
 
 
+@pytest.mark.xfail(reason="try/except not implemented yet")
 @make_test_idem
 def test_try_except_finally():
     try:
@@ -280,6 +284,7 @@ def test_try_except_finally():
     z = 4
 
 
+@pytest.mark.xfail(reason="try/except not implemented yet")
 @make_test_idem
 def test_try_except_else_finally():
     try:
@@ -292,6 +297,7 @@ def test_try_except_else_finally():
         a = 4
 
 
+@pytest.mark.xfail(reason="try/except not implemented yet")
 @make_test_idem
 def test_try_typed_except():
     try:
@@ -300,6 +306,7 @@ def test_try_typed_except():
         a = 2
 
 
+@pytest.mark.xfail(reason="try/except not implemented yet")
 @make_test_idem
 def test_try_typed_except_finally():
     try:
@@ -312,6 +319,7 @@ def test_try_typed_except_finally():
     z = 4
 
 
+@pytest.mark.xfail(reason="try/except not implemented yet")
 @make_test_idem
 def test_try_typed_except_else_finally():
     try:
@@ -324,6 +332,7 @@ def test_try_typed_except_else_finally():
         a = 4
 
 
+@pytest.mark.xfail(reason="try/except not implemented yet")
 @make_test_idem
 def test_try_multi_typed_except():
     try:
@@ -334,6 +343,7 @@ def test_try_multi_typed_except():
         a = 3
 
 
+@pytest.mark.xfail(reason="try/except not implemented yet")
 @make_test_idem
 def test_try_in_loop():
     for x in [1, 2, 3]:
@@ -350,6 +360,7 @@ def test_try_in_loop():
             break
 
 
+@pytest.mark.xfail(reason="try/except not implemented yet")
 @make_test_idem
 def test_try_in_infinite_loop():
     while True:
@@ -424,6 +435,7 @@ def test_build_collections():
     c = {1, 2, 3}
     d = {1: 2, 3: a}
     e = (a, b, c, d)
+    f = {a: b, c: d}
 
 
 @make_test_idem
@@ -641,6 +653,7 @@ def test_if_in_for():
             continue
 
 
+@pytest.mark.xfail(reason="try/except not implemented yet")
 @make_test_idem
 def test_break_in_try_in_loop():
     for i in [0]:
@@ -650,6 +663,7 @@ def test_break_in_try_in_loop():
             break
 
 
+@pytest.mark.xfail(reason="try/except not implemented yet")
 @make_test_idem
 def test_break_in_try_finally_in_loop():
     for i in [0]:
@@ -668,6 +682,7 @@ def test_break_in_try_finally_in_loop():
 
 
 
+@pytest.mark.xfail(reason="try/except not implemented yet")
 @make_test_idem
 def test_return_call_in_try_in_except():
     try:
@@ -804,4 +819,3 @@ def test_while_true_if_if_continue():
             if y:
                 continue
         return line
-

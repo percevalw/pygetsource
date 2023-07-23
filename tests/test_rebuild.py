@@ -6,7 +6,7 @@ other Function attributes.
 """
 from typing import Callable
 
-from pydecompile.factory import get_factory_code
+from pygetsource.factory import get_factory_code
 
 
 def test_simple():

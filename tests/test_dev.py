@@ -1,6 +1,6 @@
 import ast
 
-from pydecompile.decompiler import Node, set_debug
+from pygetsource.decompiler import Node, set_debug
 
 
 def make_func(global_var):

@@ -1,7 +1,7 @@
 import inspect
 import textwrap
 
-from pydecompile.decompiler import decompile
+from pygetsource.decompiler import decompile
 
 
 def reconstruct_arguments_str(code):

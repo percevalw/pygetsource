@@ -170,5 +170,4 @@ yarn.lock
 .yarnrc.yml
 yarn-error.log
 
-docs/
 .venv

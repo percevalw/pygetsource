@@ -1,18 +1,23 @@
 [project]
-name = "pydecompile"
+name = "pygetsource"
 description = "Decompiler written in Python for Python"
 authors = [
     { name = "Perceval Wajsburt", email = "perceval.wajsburt@gmail.com" }
 ]
 readme = "README.md"
 license = { file = "LICENSE" }
-urls.homepage = "https://github.com/perceval/pydecompile/"
-urls.repository = "https://github.com/perceval/pydecompile/"
+urls.homepage = "https://github.com/perceval/pygetsource/"
+urls.repository = "https://github.com/perceval/pygetsource/"
 dynamic = ["version"]
-requires-python = ">3.7.6,<4.0,!=3.8.1"
+requires-python = ">=3.7,<4.0"
 dependencies = [
     "astunparse",
 ]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["pygetsource*"]
+namespaces = false
 
 # ----- Development configuration -----
 [project.optional-dependencies]
@@ -20,7 +25,7 @@ dev = [
 ]
 
 [tool.setuptools.dynamic]
-version = { attr = "pydecompile.__version__" }
+version = { attr = "pygetsource.__version__" }
 
 # ----- Tests -----
 [tool.pytest.ini_options]

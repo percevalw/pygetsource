@@ -11,7 +11,7 @@ from .utils import (
     hasjabs,
     graph_sort,
     get_origin,
-    lowest_common_successor, compareop_to_ast, binop_to_ast, inplace_to_ast, unaryop_to_ast,
+    lowest_common_successors, compareop_to_ast, binop_to_ast, inplace_to_ast, unaryop_to_ast,
 )
 
 try:
@@ -594,7 +594,7 @@ class Node:
                     #     debug("NOT CONDITIONAL WHILE LOOP", real_branch.stack, real_branch.opname, real_branch.arg, ast.dump(real_branch.stack[-1]), ast.dump(node.stack[-1]))
                 ################
                 else:
-                    meet_nodes = lowest_common_successor(
+                    meet_nodes = lowest_common_successors(
                         if_node,
                         else_node,
                         stop_nodes={*stop_nodes, node},
@@ -1564,7 +1564,7 @@ def process_try_(node, loop_heads, stop_nodes, while_fusions):
     old_jump_node = jump_node
     jump_node.stack = [*node.stack, None, None, ExceptionPlaceholder(_dumped=True), None]
 
-    meet_nodes = list(lowest_common_successor(
+    meet_nodes = list(lowest_common_successors(
         next_node,
         jump_node,
         stop_nodes={*stop_nodes, node},

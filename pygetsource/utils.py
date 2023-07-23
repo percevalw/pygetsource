@@ -126,7 +126,7 @@ def get_origin(trees: ast.AST):
 
 
 
-def lowest_common_successor(*starts, stop_nodes=None):
+def lowest_common_successors(*starts, stop_nodes=None):
     if stop_nodes is None:
         stop_nodes = set()
 
