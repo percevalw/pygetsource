@@ -42,6 +42,27 @@ exclude_also = [
     "raise UnknownException"
 ]
 
+# ----- Documentation -----
+[tool.interrogate]
+ignore-init-method = false
+ignore-init-module = false
+ignore-magic = false
+ignore-semiprivate = true
+ignore-private = false
+ignore-property-decorators = false
+ignore-module = true
+ignore-nested-functions = true
+ignore-nested-classes = true
+ignore-setters = false
+fail-under = 8
+exclude = ["docs", "build", "tests"]
+verbose = 0
+quiet = false
+whitelist-regex = []
+ignore-regex = ['__(?!init).*__']
+color = true
+omit-covered-files = false
+
 # ----- Linting & Testing -----
 [tool.ruff]
 fix = true
@@ -53,9 +74,13 @@ exclude = [
     ".pytest_cache",
     ".venv",
     "build",
-    "tests/functions.py"
+    "tests/test_py37.py",
+    "tests/test_py38.py",
+    "tests/test_py39.py",
+    "tests/test_py310.py",
+    "tests/test_py311.py",
+    "tests/test_dev.py"
 ]
-ignore = []
 line-length = 200
 select = [
     "E",
@@ -64,4 +89,3 @@ select = [
     "I001"
 ]
 fixable = ["E", "F", "W", "I"]
-per-file-ignores = {"**/__init__.py" = "F401"}

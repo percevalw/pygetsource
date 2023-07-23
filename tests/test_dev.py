@@ -14,6 +14,7 @@ def make_func(global_var):
             a, b = b, a
 
         a, b, c = (a for a in b)
+
     return func
 
 

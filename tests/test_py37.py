@@ -1,7 +1,6 @@
 import sys
 
 import pytest as pytest
-
 from utils import make_test_idem
 
 
@@ -474,10 +473,12 @@ def test_contains():
     a = 1 in b
     a = 1 not in b
 
+
 @make_test_idem
 def test_is():
     a = 1 is b
     a = 1 is not b
+
 
 @make_test_idem
 def test_inplace_ops():
@@ -681,7 +682,6 @@ def test_break_in_try_finally_in_loop():
             x = 0
 
 
-
 @pytest.mark.xfail(reason="try/except not implemented yet")
 @make_test_idem
 def test_return_call_in_try_in_except():
@@ -699,7 +699,7 @@ def test_iter():
     for x in iter(a):
         pass
 
-    [s2 for s1 in qs.split('&') for s2 in s1.split(';')]
+    [s2 for s1 in qs.split("&") for s2 in s1.split(";")]
 
 
 @make_test_idem
@@ -733,7 +733,9 @@ def test_nested_function():
     def f():
         def g():
             return 1
+
         return g()
+
     return f()
 
 
@@ -749,7 +751,10 @@ def test_while_while_break_return():
         else:
             x = 2
 
-@pytest.mark.xfail(sys.version_info >= (3, 9), reason="behavior is the same but bytecode differs")
+
+@pytest.mark.xfail(
+    sys.version_info >= (3, 9), reason="behavior is the same but bytecode differs"
+)
 @make_test_idem
 def test_while_if_while_if_break_return():
     while True:
@@ -760,6 +765,7 @@ def test_while_if_while_if_break_return():
                 return None
         else:
             return None
+
 
 @make_test_idem
 def test_while_if_while_if_break_full_return():
@@ -773,6 +779,7 @@ def test_while_if_while_if_break_full_return():
         else:
             return None
 
+
 @make_test_idem
 def test_while_if_return():
     while True:
@@ -780,6 +787,7 @@ def test_while_if_return():
             return None
         else:
             return None
+
 
 @make_test_idem
 def test_while_if_while_if_break_assign():
@@ -792,6 +800,7 @@ def test_while_if_while_if_break_assign():
             return None
         x = 2
 
+
 @make_test_idem
 def test_while_only_break():
     a = 1
@@ -800,7 +809,9 @@ def test_while_only_break():
     return None
 
 
-@pytest.mark.xfail(sys.version_info >= (3, 9), reason="behavior is the same but bytecode differs")
+@pytest.mark.xfail(
+    sys.version_info >= (3, 9), reason="behavior is the same but bytecode differs"
+)
 @make_test_idem
 def test_while_true_if_if_continue_assign():
     while True:
@@ -811,7 +822,9 @@ def test_while_true_if_if_continue_assign():
     return z
 
 
-@pytest.mark.xfail(sys.version_info >= (3, 9), reason="behavior is the same but bytecode differs")
+@pytest.mark.xfail(
+    sys.version_info >= (3, 9), reason="behavior is the same but bytecode differs"
+)
 @make_test_idem
 def test_while_true_if_if_continue():
     while True:

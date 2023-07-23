@@ -1,3 +1,8 @@
+<a href="https://github.com/psf/black/blob/main/LICENSE"><img alt="License: MIT" src="https://black.readthedocs.io/en/stable/_static/license.svg"></a>
+<a href="https://pypi.org/project/pygetsource/"><img alt="PyPI" src="https://img.shields.io/pypi/v/pygetsource"></a>
+<a href="https://github.com/psf/black"><img alt="Code style: black" src="https://img.shields.io/badge/code%20style-black-000000.svg"></a>
+
+
 # pygetsource
 
 `pygetsource` is a Python decompiler, aiming to convert bytecode instructions back into Python code. This is useful when trying to recover the source code of a function from its bytecode instructions.
@@ -34,23 +39,24 @@ pip install pygetsource
 ## Usage
 
 ```python
-
 import pygetsource
+
 
 def func():
     a = 5
-    
+
     while i < 10:
         if a == 2:
             break
         elif a == 4:
             return 3
-        
+
         a = i // 5
-        
+
     d = 3
     e = 4
     return e + d
+
 
 print(pygetsource.getsource(func.__code__))
 ```

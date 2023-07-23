@@ -3,7 +3,7 @@ import dis
 import functools
 import sys
 from collections import deque
-from typing import List, Set, TypeVar
+from typing import TypeVar
 
 try:
     # Try/except to skip circular import errors
@@ -68,8 +68,17 @@ if sys.version_info < (3, 9):
     compareop_to_ast[cmp_map["is"]] = ast.Is()
     compareop_to_ast[cmp_map["is not"]] = ast.IsNot()
 
-hasjabs = ["JUMP_ABSOLUTE", "FOR_ITER", "POP_JUMP_IF_FALSE", "POP_JUMP_IF_TRUE", "JUMP_FORWARD", "JUMP_IF_FALSE_OR_POP", "JUMP_IF_TRUE_OR_POP", "JUMP_IF_NOT_EXC_MATCH", "SETUP_FINALLY"]
-
+hasjabs = [
+    "JUMP_ABSOLUTE",
+    "FOR_ITER",
+    "POP_JUMP_IF_FALSE",
+    "POP_JUMP_IF_TRUE",
+    "JUMP_FORWARD",
+    "JUMP_IF_FALSE_OR_POP",
+    "JUMP_IF_TRUE_OR_POP",
+    "JUMP_IF_NOT_EXC_MATCH",
+    "SETUP_FINALLY",
+]
 
 
 def graph_sort(root):
@@ -105,7 +114,6 @@ def graph_sort(root):
     return order[::-1]
 
 
-
 def get_origin(trees: ast.AST):
     offset = None
     origin = None
@@ -123,7 +131,6 @@ def get_origin(trees: ast.AST):
             except AttributeError:
                 pass
         return origin, offset
-
 
 
 def lowest_common_successors(*starts, stop_nodes=None):

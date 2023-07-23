@@ -62,7 +62,7 @@ def getfactory(code: CodeType) -> str:
     if code.co_freevars:
         free_vars = " = ".join(code.co_freevars) + " = None"
         factory_code = (
-            f"def _factory_():\n"
+            "def _factory_():\n"
             + (f"  {free_vars}\n" if free_vars else "")
             + f"{textwrap.indent(function_code, '  ')}\n"
             f"  return {function_name}\n"

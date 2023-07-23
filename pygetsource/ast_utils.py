@@ -1,4 +1,5 @@
 import ast
+
 from astunparse.unparser import Unparser
 
 
@@ -16,10 +17,13 @@ class ForTargetPlaceholder(ast.AST):
     _attributes = ()
     _fields = ()
 
+
 def unparse_ForTargetPlaceholder(self, node):
     self.write("[...]")
 
+
 Unparser._ForTargetPlaceholder = unparse_ForTargetPlaceholder
+
 
 class ExceptionMatch(ast.AST):
     _attributes = ()
@@ -38,6 +42,7 @@ class Reraise(ast.AST):
     _attributes = ()
     _fields = ()
 
+
 class ComprehensionBody(ast.AST):
     _attributes = ()
     _fields = ("value", "collection")
@@ -53,6 +58,7 @@ def unparse_ComprehensionBody(self, node):
     self.write("append/add(")
     self.dispatch(node.value)
     self.write(")")
+
 
 Unparser._ComprehensionBody = unparse_ComprehensionBody
 
@@ -70,8 +76,9 @@ class RewriteComprehensionArgs(ast.NodeTransformer):
 
     def visit_For(self, node: ast.For):
         assert (
-              len(node.body) == 1
-              or len(node.body) == 2 and isinstance(node.body[1], ast.Continue)
+            len(node.body) == 1
+            or len(node.body) == 2
+            and isinstance(node.body[1], ast.Continue)
         )
         target = self.visit(node.target)
         elt = self.visit(node.body[0])
@@ -80,17 +87,16 @@ class RewriteComprehensionArgs(ast.NodeTransformer):
         if isinstance(elt, ast.If):
             condition = elt.test
             assert (
-                  len(elt.body) == 1
-                  or len(elt.body) == 2 and isinstance(elt.body[1], ast.Continue)
+                len(elt.body) == 1
+                or len(elt.body) == 2
+                and isinstance(elt.body[1], ast.Continue)
             )
             elt = elt.body[0]
         generators = [
             ast.comprehension(
                 target=target,
                 iter=iter,
-                ifs=[condition]
-                if condition is not None
-                else [],  # TODO
+                ifs=[condition] if condition is not None else [],  # TODO
                 is_async=False,  # TODO
             )
         ]
@@ -144,9 +150,12 @@ class RemoveLastContinue(ast.NodeTransformer):
                     (True, old_value[-1:]),
                 ]:
                     self.can_remove_continue = (
-                          (isinstance(node, (ast.For, ast.While)) or last_val)
-                          and last_in_body
-                          and not (len(old_value) == 1 and isinstance(old_value[0], ast.Continue))
+                        (isinstance(node, (ast.For, ast.While)) or last_val)
+                        and last_in_body
+                        and not (
+                            len(old_value) == 1
+                            and isinstance(old_value[0], ast.Continue)
+                        )
                     )
                     for value in split:
                         if isinstance(value, ast.AST):
@@ -184,11 +193,12 @@ class RemoveLastContinue(ast.NodeTransformer):
             return None
         return node
 
+
 class WhileBreakFixer(ast.NodeTransformer):
     def __init__(self, while_fusions):
         self.while_fusions = while_fusions
 
     def visit_Break(self, node):
-        if hasattr(node, '_loop_node') and node._loop_node in self.while_fusions:
+        if hasattr(node, "_loop_node") and node._loop_node in self.while_fusions:
             return ast.Continue()
         return node
