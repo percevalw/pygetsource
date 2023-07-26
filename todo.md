@@ -1,3 +1,8 @@
+Current supported opcodes and syntaxes
+
+
+## OpCodes
+
 - [x] BINARY_FLOOR_DIVIDE
 - [ ] BEFORE_ASYNC_WITH
 - [ ] BEGIN_FINALLY
@@ -143,3 +148,58 @@
 - [ ] WITH_EXCEPT_START
 - [ ] YIELD_FROM
 - [ ] YIELD_VALUE
+
+## Syntaxes
+
+- [ ] FunctionDef: partial support, not defaults or pos-only, kw-only args
+- [ ] AsyncFunctionDef
+- [ ] ClassDef
+- [x] Return
+- [x] Delete
+- [x] Assign
+- [x] AugAssign
+- [ ] AnnAssign
+- [x] For
+- [ ] AsyncFor
+- [x] While
+- [x] If
+- [ ] With
+- [ ] AsyncWith
+- [ ] Match
+- [ ] Raise
+- [ ] Try
+- [ ] TryStar
+- [ ] Assert
+- [ ] Import
+- [ ] ImportFrom
+- [x] Global: see `pygetsource.getfactory`
+- [x] Nonlocal: see `pygetsource.getfactory`
+- [x] Expr
+- [x] Pass | Break | Continue
+- [x] BoolOp
+- [ ] NamedExpr
+- [x] BinOp
+- [x] UnaryOp
+- [ ] Lambda: decompiled as `def`
+- [x] IfExp
+- [x] Dict
+- [x] Set
+- [x] ListComp
+- [x] SetComp
+- [x] DictComp
+- [x] GeneratorExp
+- [ ] Await
+- [ ] Yield
+- [ ] YieldFrom
+- [x] Compare
+- [x] Call
+- [x] FormattedValue
+- [x] JoinedStr
+- [x] Constant
+- [x] Attribute
+- [x] Subscript
+- [x] Starred
+- [x] Name
+- [x] List
+- [x] Tuple
+- [x] Slice
