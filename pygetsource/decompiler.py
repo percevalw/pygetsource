@@ -480,7 +480,12 @@ class Node:
                 stmt = ast.fix_missing_locations(stmt)
             except AttributeError:
                 pass
-            res.append(astunparse.unparse(stmt).strip("\n"))
+            try:
+                res.append(astunparse.unparse(stmt).strip("\n"))
+            except Exception:
+                print("Could not unparse:", ast.dump(stmt))
+                raise
+
         return "\n".join(res)
 
     def last_stmts(self):
@@ -1085,6 +1090,47 @@ class Node:
                 value = node.pop_stack()
                 for i in reversed(range(node.arg)):
                     node.add_stack(Unpacking(value, counter=i))
+            elif node.opname in (
+                "BUILD_LIST_UNPACK",
+                "BUILD_SET_UNPACK",
+                "BUILD_TUPLE_UNPACK",
+                "BUILD_TUPLE_UNPACK_WITH_CALL",
+            ):
+                values = []
+                for _ in range(node.arg):
+                    value = node.pop_stack()
+                    if isinstance(value, ast.Constant):
+                        value = [ast.Constant(x, kind=None) for x in value.value]
+                    elif hasattr(value, "elts"):
+                        value = value.elts
+                    else:
+                        value = [ast.Starred(value)]
+                    values.append(value)
+                if node.opname == "BUILD_LIST_UNPACK":
+                    node.add_stack(ast.List(values[::-1]))
+                elif node.opname == "BUILD_SET_UNPACK":
+                    node.add_stack(ast.Set(values[::-1]))
+                else:
+                    node.add_stack(ast.Tuple(values[::-1]))
+            elif node.opname in ("BUILD_MAP_UNPACK", "BUILD_MAP_UNPACK_WITH_CALL"):
+                unpacked = []
+                for _ in range(node.arg):
+                    value = node.pop_stack()
+                    if isinstance(value, ast.Dict) and all(
+                        key.value is not None
+                        and isinstance(key.value, str)
+                        and key.value.isidentifier()
+                        for key in value.keys
+                        if key is not None and isinstance(key, ast.Constant)
+                    ):
+                        # check for valid python keywords identifiers
+                        unpacked.extend(zip(value.keys, value.values))
+                    else:
+                        unpacked.extend([(None, value)])
+                unpacked = unpacked[::-1]
+                keys = [k for k, v in unpacked]
+                values = [v for k, v in unpacked]
+                node.add_stack(ast.Dict(keys, values))
             elif node.opname == "UNPACK_EX":
                 # FROM Python's doc:
                 # The low byte of counts is the number of values before the list value,
@@ -1098,7 +1144,7 @@ class Node:
             elif node.opname in ("LIST_EXTEND", "SET_UPDATE"):
                 items = node.pop_stack()
                 if isinstance(items, ast.Constant):
-                    items = [ast.Constant(x) for x in items.value]
+                    items = [ast.Constant(x, kind=None) for x in items.value]
                 elif hasattr(items, "elts"):
                     items = items.elts
                 else:
@@ -1110,7 +1156,8 @@ class Node:
                 items = node.pop_stack()
                 if isinstance(items, ast.Constant):
                     items = [
-                        (ast.Name(n), ast.Constant(v)) for n, v in items.value.items()
+                        (ast.Name(n), ast.Constant(v, kind=None))
+                        for n, v in items.value.items()
                     ]
                 # elif hasattr(items, 'keys'):
                 #    items = [(k, v) for k, v in zip(items.keys, items.values)]
@@ -1140,6 +1187,11 @@ class Node:
             elif node.opname == "MAP_ADD":
                 value = node.pop_stack()
                 key = node.pop_stack()
+                # From https://docs.python.org/3.10/library/dis.html#opcode-MAP_ADD
+                # Changed in version 3.8: Map value is TOS and map key is TOS1.
+                # Before, those were reversed.
+                if sys.version_info < (3, 8):
+                    key, value = value, key
                 collection = node.stack[-node.arg]
                 # if we can loop to the collection beginning
                 if (
@@ -1316,7 +1368,7 @@ class Node:
                 elif isinstance(args, ast.Constant) and isinstance(
                     args.value, (tuple, list)
                 ):
-                    args = [ast.Constant(value=elt, kind=True) for elt in args.value]
+                    args = [ast.Constant(value=elt, kind=None) for elt in args.value]
                 node.add_stack(
                     ast.Call(
                         func=func,

@@ -702,6 +702,7 @@ def test_iter():
     [s2 for s1 in qs.split("&") for s2 in s1.split(";")]
 
 
+@pytest.mark.xfail(reason="try/except not implemented yet")
 @make_test_idem
 def test_empty_try():
     try:
@@ -752,9 +753,6 @@ def test_while_while_break_return():
             x = 2
 
 
-@pytest.mark.xfail(
-    sys.version_info >= (3, 9), reason="behavior is the same but bytecode differs"
-)
 @make_test_idem
 def test_while_if_while_if_break_return():
     while True:
