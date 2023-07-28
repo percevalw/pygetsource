@@ -171,3 +171,4 @@ yarn.lock
 yarn-error.log
 
 .venv
+.venv3*
