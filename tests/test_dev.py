@@ -1,6 +1,4 @@
-import ast
-
-from pygetsource.decompiler import Node, set_debug
+from pygetsource.decompiler import set_debug, getsource
 
 
 def make_func(global_var):
@@ -13,15 +11,12 @@ def make_func(global_var):
         for u in v:
             a, b = b, a
 
-        a, b, c = (a for a in b)
+        a, b, c = (a if a % 2 == 0 else 0 for a in b)
 
     return func
 
 
 def test_draw():
     func = make_func(1)
-    root = Node.from_code(func.__code__)
-    root.draw(prog="nop")
     with set_debug(prog="nop"):
-        root = root.run()
-    ast.dump(root.stmts[0])
+        getsource(func.__code__, debug=True)

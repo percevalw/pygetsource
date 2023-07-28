@@ -1,11 +1,13 @@
-<a href="https://github.com/psf/black/blob/main/LICENSE"><img alt="License: MIT" src="https://black.readthedocs.io/en/stable/_static/license.svg"></a>
-<a href="https://pypi.org/project/pygetsource/"><img alt="PyPI" src="https://img.shields.io/pypi/v/pygetsource"></a>
-<a href="https://github.com/psf/black"><img alt="Code style: black" src="https://img.shields.io/badge/code%20style-black-000000.svg"></a>
+[![Codecov](https://img.shields.io/codecov/c/github/percevalw/pygetsource?logo=codecov&style=flat-square)](https://codecov.io/gh/percevalw/pygetsource)
+[![PyPI](https://img.shields.io/pypi/v/pygetsource?color=blue&style=flat-square)](https://pypi.org/project/pygetsource/)
+![Tests](https://img.shields.io/github/actions/workflow/status/percevalw/pygetsource/tests.yml?branch=main&label=tests&style=flat-square)
+[![Code style: black](https://img.shields.io/badge/code_style-black-black?style=flat-square)](https://github.com/psf/black)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg?style=flat-square)](https://opensource.org/licenses/MIT)
 
 
 # pygetsource
 
-`pygetsource` is a Python decompiler, aiming to convert bytecode instructions back into Python code. This is useful when trying to recover the source code of a function from its bytecode instructions.
+`pygetsource` is a Python decompiler, aiming to convert compiled bytecode instructions back into Python code.
 
 ## Overview
 
@@ -26,7 +28,9 @@ The latter form is typically stored in `.pyc` files and in the `__code__` attrib
 
 The project takes its name from the `inspect.getsource` function, which returns the source code of a function, but it is not always applicable, as explained above.
 
-`pygetsource` is still in development. It should be able to recover the source code of simple functions for various programs from Python 3.7 to Python 3.10. It is not yet able to recover the source code of classes, import statements, try/except blocks, and does not support Python 2. While functional, the codebase has not been optimized and is in need of significant refactoring.
+`pygetsource` is still in development. It should be able to recover the source code of simple functions for various programs from Python 3.7 to Python 3.10. It is not yet able to recover the source code of classes, import statements, try/except/match/with blocks, and does not support Python 2. While functional, the codebase has not been optimized and is in need of significant refactoring.
+
+Finally, this software is distributed under the permissive MIT license.
 
 ## Installation
 
@@ -63,7 +67,7 @@ print(pygetsource.getsource(func.__code__))
 
 produces the following output:
 
-```
+```python
 a = 5
 while i < 10:
     if a == 2:
@@ -77,12 +81,12 @@ e = 4
 return e + d
 ```
 
-Notice how the `else` statement is added to the `elif` statement, yet the two programs are functionally equivalent.
+Notice how the `else` statement was added to the `elif` statement, yet the two programs are functionally equivalent.
 
 
 ## When is this useful ?
 
-`pygetsource` proves useful when you need to recover the source code from a `.pyc` file, or when a function is created through an eval statement or lambda syntax, since for the latter, Python versions earlier than 3.11 do not store the exact character offset of the function in the source code, making it hard to retrieve the lambda source code.
+`pygetsource` proves useful when you need to recover the source code from a `.pyc` file, or when you want to get the source code of a function created through an eval statement or a lambda syntax. Indeed, running `inspect.getsource` fail in the latter case since the origin file of the function is either not available, or Python does not provide the exact boundaries, which are required in the case of lambda functions.
 
 ## Alternatives
 
@@ -101,8 +105,6 @@ Here is an example of a graph being reduced:
 
 ![Graph reduction](./docs/graph-example.svg)
 
-
-Finally, this software is distributed under the permissive MIT license, making it ideal for use as a dependency in larger projects.
 
 ## When is a decompilation successful ?
 
