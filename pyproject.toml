@@ -22,10 +22,12 @@ namespaces = false
 # ----- Development configuration -----
 [project.optional-dependencies]
 dev = [
-    "pytest>=7.1.0,<8.0.0",
-    "pytest-cov>=3.0.0,<5.0.0",
-    "networkx>=3.1,<4.0",
-    "pygraphviz>=1.11,<2.0",
+    "pytest",
+    "pytest-cov",
+    "coverage[toml]>=7.2.0",
+    "networkx>=2.0.0,<4.0",
+    "pygraphviz>=1.7,<2.0",
+    "ipython>=6.0.0,<8.0.0",
 ]
 
 [tool.setuptools.dynamic]
@@ -39,8 +41,16 @@ testpaths = [
 
 [tool.coverage.report]
 exclude_also = [
-    "raise UnknownException"
-]
+    "def __repr__",
+    "raise NotImplementedError",
+    "raise .*Error",
+    "raise .*Exception",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    "if DEBUG:",
+    "class .*\\bProtocol\\):",
+    "@(abc\\.)?abstractmethod",
+    ]
 
 # ----- Documentation -----
 [tool.interrogate]

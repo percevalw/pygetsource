@@ -1,7 +1,5 @@
 import ast
 
-from astunparse.unparser import Unparser
-
 
 class Unpacking(ast.AST):
     _attributes = ()
@@ -16,13 +14,6 @@ class Unpacking(ast.AST):
 class ForTargetPlaceholder(ast.AST):
     _attributes = ()
     _fields = ()
-
-
-def unparse_ForTargetPlaceholder(self, node):
-    self.write("[...]")
-
-
-Unparser._ForTargetPlaceholder = unparse_ForTargetPlaceholder
 
 
 class ExceptionMatch(ast.AST):
@@ -52,21 +43,10 @@ class ComprehensionBody(ast.AST):
         self.value = value
 
 
-def unparse_ComprehensionBody(self, node):
-    """Produced by LIST_APPEND or SET_ADD and unparsed as collection.append/add(value)"""
-    self.fill()
-    self.write("append/add(")
-    self.dispatch(node.value)
-    self.write(")")
-
-
-Unparser._ComprehensionBody = unparse_ComprehensionBody
-
-
 class RewriteComprehensionArgs(ast.NodeTransformer):
-    def __init__(self, args, cls):
+    def __init__(self, args):
         self.args = args
-        self.cls = cls
+        self.cls = None
 
     def visit_Name(self, node):
         if node.id.startswith("."):
@@ -107,19 +87,19 @@ class RewriteComprehensionArgs(ast.NodeTransformer):
             generators = generators + elt.generators
             elt = elt.elt
         elif isinstance(elt, ComprehensionBody):
-            cls = {
+            self.cls = {
                 ast.List: ast.ListComp,
                 ast.Set: ast.SetComp,
                 ast.Dict: ast.DictComp,
             }[type(elt.collection)]
             elt = elt.value
         elif isinstance(elt, ast.Expr) and isinstance(elt.value, ast.Yield):
-            cls = ast.GeneratorExp
+            self.cls = ast.GeneratorExp
             elt = elt.value.value
         else:
-            raise Exception("Unexpected " + ast.dump(elt) + ", cls:" + str(cls))
+            raise Exception("Unexpected " + ast.dump(elt) + ", cls:" + str(self.cls))
 
-        if issubclass(cls, ast.DictComp):
+        if issubclass(self.cls, ast.DictComp):
             return ast.DictComp(
                 key=elt[0],
                 value=elt[1],
@@ -127,7 +107,7 @@ class RewriteComprehensionArgs(ast.NodeTransformer):
                 ifs=[],
             )
         else:
-            return cls(
+            return self.cls(
                 elt=elt,
                 generators=generators,
                 ifs=[],

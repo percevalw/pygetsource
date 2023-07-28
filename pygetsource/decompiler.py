@@ -1,15 +1,23 @@
 import ast
 import dis
-import io
 import sys
 import textwrap
 from types import CodeType
-from typing import List, Optional, Set, Tuple, Type
+from typing import List, Optional, Set, Tuple
 
-from astunparse.unparser import Unparser
 from IPython.display import display
 
-from .ast_utils import RemoveLastContinue
+from .ast_utils import (
+    ComprehensionBody,
+    ExceptionMatch,
+    ExceptionPlaceholder,
+    ForTargetPlaceholder,
+    RemoveLastContinue,
+    Reraise,
+    RewriteComprehensionArgs,
+    Unpacking,
+    WhileBreakFixer,
+)
 from .utils import (
     binop_to_ast,
     compareop_to_ast,
@@ -25,11 +33,9 @@ try:
     import ast as astunparse
 
     assert hasattr(astunparse, "unparse")
-    print("Using ast.unparse")
 except AssertionError:
     import astunparse
 
-INDENT = 0
 DEBUG = False
 DRAW_PROG = "dot"
 
@@ -49,76 +55,9 @@ class set_debug:
         DEBUG, DRAW_PROG = self.old
 
 
-def debug(*args, **kwargs):
-    if DEBUG:
-        buffer = io.StringIO()
-        print(*args, **kwargs, file=buffer)
-        print(textwrap.indent(buffer.getvalue(), "  " * INDENT), end="")
-
-
 def warn(*args):
-    # debug but in red
+    # print but in red
     print("\033[91m", *args, "\033[0m")
-
-
-class Unpacking(ast.AST):
-    _attributes = ()
-    _fields = ("value",)
-
-    def __init__(self, value, counter, starred=False):
-        self.value = value
-        self.counter = counter
-        self.starred = starred
-
-
-class ForTargetPlaceholder(ast.AST):
-    _attributes = ()
-    _fields = ()
-
-
-def unparse_ForTargetPlaceholder(self, node):
-    self.write("[...]")
-
-
-Unparser._ForTargetPlaceholder = unparse_ForTargetPlaceholder
-
-
-class ExceptionMatch(ast.AST):
-    _attributes = ()
-    _fields = ("value",)
-
-    def __init__(self, value):
-        self.value = value
-
-
-class ExceptionPlaceholder(ast.AST):
-    _attributes = ()
-    _fields = ()
-
-
-class Reraise(ast.AST):
-    _attributes = ()
-    _fields = ()
-
-
-class ComprehensionBody(ast.AST):
-    _attributes = ()
-    _fields = ("value", "collection")
-
-    def __init__(self, value, collection):
-        self.collection = collection
-        self.value = value
-
-
-def unparse_ComprehensionBody(self, node):
-    """Produced by LIST_APPEND or SET_ADD and unparsed as collection.append/add(value)"""
-    self.fill()
-    self.write("append/add(")
-    self.dispatch(node.value)
-    self.write(")")
-
-
-Unparser._ComprehensionBody = unparse_ComprehensionBody
 
 
 class Node:
@@ -126,9 +65,7 @@ class Node:
         # Two choices when walking the graph, either go to the next node or
         # jump to a different node in case of a (un)conditional jump
         self.next: Optional[Node] = None
-        self.next_is_virtual: bool = False
         self.jumps: Set[Node] = set()
-        self.virtual = None
 
         # Previous nodes
         self.prev: Set[Node] = set()
@@ -159,10 +96,10 @@ class Node:
 
     def add_stmt(self, stmt):
         if DEBUG:
-            debug("Add stmt", self, ":", stmt)
+            print("Add stmt", self, ":", stmt)
         try:
             if DEBUG:
-                debug(
+                print(
                     textwrap.indent(
                         astunparse.unparse(ast.fix_missing_locations(stmt)), "  "
                     )
@@ -172,10 +109,8 @@ class Node:
         self.stmts.append(stmt)
 
     def add_stack(self, item):
-        if self.stack is None:
-            self.stack = []
         if DEBUG:
-            debug("Add stack", self, ":", item)
+            print("Add stack", self, ":", item)
         self.stack.append(item)
 
     def pop_stack(self):
@@ -189,33 +124,14 @@ class Node:
         # If the node has a single predecessor, merge it with that node
 
         prev_node = next((n for n in self.prev if n.next is self), None)
-        if not self.prev:
-            self.loops = frozenset()
-        if not (
-            prev_node
-            and (
-                (len(self.prev) == 1)
-                or prev_node.opname in ("NOP",)  # and not prev_node.jumps) or
-            )
-        ):
-            if DEBUG:
-                debug(
-                    "Could not contract",
-                    prev_node,
-                    "!<<<!",
-                    self,
-                    "| next:",
-                    self.next,
-                    "jumps:",
-                    self.jumps,
-                    "| prev:",
-                    self.prev,
-                )
-            return None
+        assert prev_node and (
+            (len(self.prev) == 1)
+            or prev_node.opname in ("NOP",)  # and not prev_node.jumps) or
+        )
 
         prev_node._container = self._container
         if DEBUG:
-            debug(
+            print(
                 "Contract backward",
                 prev_node,
                 "<<<",
@@ -248,7 +164,7 @@ class Node:
 
         self.stmts = prev_node.stmts + self.stmts
         if DEBUG:
-            debug("After contraction", self, "|", self.next, self.jumps, "|", self.prev)
+            print("After contraction", self, "|", self.next, self.jumps, "|", self.prev)
 
         return prev_node
 
@@ -312,45 +228,13 @@ class Node:
                 if block.offset in graph:
                     block.next = graph[block.offset]
 
-            if (
-                # sys.version_info <= (3, 9)
-                block.offset in graph
-                and not block.next
-                and graph[block.offset] not in block.jumps
-                and not prune
-                and False
-            ):
-                block.next = graph[block.offset]
-                block.next_is_virtual = True
-
             if block.next:
                 block.next.prev.add(block)
             for jump in block.jumps:
                 jump.prev.add(block)
 
-            # block.is_virtual = True
-
         root = graph[0]
         root = rewire_break_loop(root)
-
-        if not prune:
-            prune_virtual_edges(root)
-        # seen = set()
-        # def unset_virtual(x):
-        #     if x in seen:
-        #         return
-        #     x.is_virtual = False
-        #     #for prev in tuple(x.prev):
-        #     #    if prev.next_is_virtual and prev.next is x:
-        #     #        prev.next = None
-        #     #        x.prev.remove(prev)
-        #     #        print("Removing prev from", x, ":", prev)
-        #     seen.add(x)
-        #     if not x.is_virtual:
-        #         for n in (x.next if not x.next_is_virtual else None, *x.jumps):
-        #             if n:
-        #                 unset_virtual(n)
-        # unset_virtual(graph[0])
 
         index = 0
         sorted_nodes = []
@@ -430,8 +314,7 @@ class Node:
             max_line = max(len(line) for line in source)
             label = "\n".join(
                 [
-                    ("~({})".format(node.virtual) if node.virtual else "")
-                    + f"[{node.op_idx}]{'✓' if node.visited else ''}|"
+                    f"[{node.op_idx}]{'✓' if node.visited else ''}|"
                     f"{len(node.stack) if node.stack else 0}☰|{len(node.prev)}↣",
                     # f"↺({','.join(str(i) for i in sorted(node.loops))})",
                     f"{node.opname}({node.arg_value})",
@@ -446,11 +329,7 @@ class Node:
                 fontsize=10,
                 color="red" if node is self else "black",
             )
-            # positions[node] = pos
-            if node.next and not node.next_is_virtual:
-                g.add_edge(node, node.next, label="next", fontsize=10)
-                rec(node.next, (pos[0], pos[1] + 1))
-            elif node.next:
+            if node.next:
                 g.add_edge(node, node.next, label="(next)", fontsize=10, style="dashed")
                 rec(node.next, (pos[0], pos[1] + 1))
 
@@ -476,15 +355,11 @@ class Node:
     def to_source(self):
         res = []
         for stmt in self.stmts:
-            try:
-                stmt = ast.fix_missing_locations(stmt)
-            except AttributeError:
-                pass
+            stmt = ast.fix_missing_locations(stmt)
             try:
                 res.append(astunparse.unparse(stmt).strip("\n"))
             except Exception:
-                print("Could not unparse:", ast.dump(stmt))
-                raise
+                raise ValueError("Could not unparse", ast.dump(stmt))
 
         return "\n".join(res)
 
@@ -514,12 +389,8 @@ class Node:
             return None
 
         while True:
-            if node.visited:
-                if DEBUG:
-                    debug("::: Already visited", node)
-                break
             if DEBUG:
-                debug(
+                print(
                     "::: Processing",
                     node,
                     "|",
@@ -533,9 +404,7 @@ class Node:
             node.visited = True
             prev_visited = [n for n in node.prev if n.visited]
             if len(prev_visited) > 1:
-                if DEBUG:
-                    debug("Too many prev visited", prev_visited, "for", node)
-                raise Exception("Too many prev visited")
+                raise Exception(f"Too many visited predecessors for {node}")
             if node.stack is None:
                 if prev_visited and prev_visited[0].stack is not None:
                     node.stack = list(prev_visited[0].stack)
@@ -576,27 +445,6 @@ class Node:
                 else:
                     if not same_context:
                         node.add_stmt(ast.Break(_loop_node=jump))
-
-                if node.next and node.next_is_virtual:
-                    next_node = node.next
-                    print("NEXT VIRTUAL NODE", node, "->", next_node, next_node.virtual)
-                    if next_node.virtual:
-                        next_node = next_node._run(
-                            stop_nodes={*stop_nodes, *node.jumps},
-                            loop_heads=loop_heads,
-                            while_fusions=while_fusions,
-                        )
-                        if next_node is None:
-                            next_node = node.next
-                    print("...NEXT VIRTUAL NODE", node, "->", next_node)
-                    node.next = None
-                    next_node.prev.discard(node)
-                    node.stmts.extend(next_node.stmts)
-                    for succ in (next_node.next, *next_node.jumps):
-                        if succ and next_node in succ.prev:
-                            succ.prev.discard(next_node)
-                            succ.prev.add(node)
-                    node.jumps |= {next_node.next, *next_node.jumps} - {None}
             elif node.opname in (
                 "POP_JUMP_IF_TRUE",
                 "POP_JUMP_IF_FALSE",
@@ -618,7 +466,7 @@ class Node:
                 # SPECIAL CASE #
                 ################
                 if DEBUG:
-                    debug(
+                    print(
                         "IF/ELSE BLOCK",
                         node,
                         "LOOP HEADS",
@@ -651,7 +499,7 @@ class Node:
                     real_head = get_origin(real_branch.jump_test)[0].container
 
                     if DEBUG:
-                        debug("THIS SHOULD BE A CONDITIONAL WHILE LOOP", ast.dump(test))
+                        print("THIS SHOULD BE A CONDITIONAL WHILE LOOP", ast.dump(test))
                     # node.add_stmt(ast.Continue())
                     node.next.prev.discard(node)
                     node.next = None
@@ -672,7 +520,7 @@ class Node:
                         stop_nodes={*stop_nodes, node},
                     )
                     if DEBUG:
-                        debug(
+                        print(
                             "IF/ELSE BLOCK",
                             node,
                             "MEET",
@@ -702,9 +550,9 @@ class Node:
                         while_fusions=while_fusions,
                     )
                     if DEBUG:
-                        debug("IF/ELSE", node, "MEET", meet_nodes)
+                        print("IF/ELSE", node, "MEET", meet_nodes)
                     if DEBUG:
-                        debug(
+                        print(
                             "IF/ELSE",
                             node,
                             "BEFORE succ",
@@ -729,21 +577,6 @@ class Node:
 
                     test_origin = get_origin(test)[0].container
                     has_been_unparsed = False
-                    if DEBUG:
-                        debug(
-                            "IS THIS A WHILE X LOOP ?",
-                            node,
-                            "LH",
-                            loop_heads,
-                            "IF NEXT",
-                            (if_node or old_if_node).next,
-                            "IF LOOP HEAD",
-                            if_loop_head,
-                            "TEST",
-                            test_origin,
-                            "ELSE LOOP HEAD",
-                            else_loop_head,
-                        )
                     was_a_loop = False
                     if (
                         loop_heads
@@ -756,7 +589,7 @@ class Node:
                         and else_loop_head is not loop_heads[-1]
                     ) or node.is_conditional_while:
                         if DEBUG:
-                            debug(
+                            print(
                                 "THIS IS A WHILE X LOOP",
                                 node,
                                 "LOOP HEAD",
@@ -873,20 +706,20 @@ class Node:
                         if n and n.visited
                     }
                     if DEBUG:
-                        debug(
+                        print(
                             "IF/ELSE SUCC BEFORE CONTRACT",
                             successors,
                             "-",
                             discarded_successors,
                         )
                     if DEBUG:
-                        debug("IF/ELSE PREV BEFORE CONTRACT", node.prev)
+                        print("IF/ELSE PREV BEFORE CONTRACT", node.prev)
                     successors = successors - discarded_successors
 
                     jump_nodes = successors
                     for succ in successors:
                         if DEBUG:
-                            debug(
+                            print(
                                 "IF/ELSE",
                                 node,
                                 ": REBINDING SUCCESSOR",
@@ -909,11 +742,11 @@ class Node:
                     node.next = None
                     node.jumps = jump_nodes
                     if DEBUG:
-                        debug("IF/ELSE", node, node.stack)
+                        print("IF/ELSE", node, node.stack)
                     if DEBUG:
-                        debug("IF/ELSE SUCC AFTER CONTRACT", successors)
+                        print("IF/ELSE SUCC AFTER CONTRACT", successors)
                     if DEBUG:
-                        debug(
+                        print(
                             "IF/ELSE PREV AFTER CONTRACT",
                             node.prev,
                             "prevs successor:",
@@ -959,9 +792,9 @@ class Node:
                     body_node, (node, jump_node, *stop_nodes)
                 )
                 if DEBUG:
-                    debug("FOR LOOP HEAD", body_loop_head)
+                    print("FOR LOOP HEAD", body_loop_head)
                 if DEBUG:
-                    debug("BODY", [ast.dump(x) for x in body_node.stmts])
+                    print("BODY", [ast.dump(x) for x in body_node.stmts])
                 target = body_node.stmts.pop(0).targets[0]
 
                 body_stmts = (body_node.stmts if body_node else []) + (
@@ -981,9 +814,9 @@ class Node:
                     n for n in (body_node, old_body_node, node) if n and n.visited
                 }
                 if DEBUG:
-                    debug("FOR SUCC", successors, "-", discarded_successors)
+                    print("FOR SUCC", successors, "-", discarded_successors)
                 if DEBUG:
-                    debug("FOR PREV", node.prev)
+                    print("FOR PREV", node.prev)
                 successors = successors - discarded_successors
                 jump_nodes = successors
                 for succ in successors:
@@ -1246,79 +1079,8 @@ class Node:
                 func = node.pop_stack()
                 if isinstance(func, ast.FunctionDef):
 
-                    class RewriteComprehensionArgs(ast.NodeTransformer):
-                        def visit_Name(self, node):
-                            if node.id.startswith("."):
-                                var_idx = int(node.id[1:])
-                                return args[var_idx]
-                            return node
-
-                        def visit_For(self, node: ast.For):
-                            nonlocal cls
-                            assert (
-                                len(node.body) == 1
-                                or len(node.body) == 2
-                                and isinstance(node.body[1], ast.Continue)
-                            )
-                            target = self.visit(node.target)
-                            elt = self.visit(node.body[0])
-                            iter = self.visit(node.iter)
-                            condition = None
-                            if isinstance(elt, ast.If):
-                                condition = elt.test
-                                assert (
-                                    len(elt.body) == 1
-                                    or len(elt.body) == 2
-                                    and isinstance(elt.body[1], ast.Continue)
-                                )
-                                elt = elt.body[0]
-                            generators = [
-                                ast.comprehension(
-                                    target=target,
-                                    iter=iter,
-                                    ifs=[condition]
-                                    if condition is not None
-                                    else [],  # TODO
-                                    is_async=False,  # TODO
-                                )
-                            ]
-                            if cls and isinstance(elt, cls):
-                                generators = generators + elt.generators
-                                elt = elt.elt
-                            elif isinstance(elt, ComprehensionBody):
-                                cls = {
-                                    ast.List: ast.ListComp,
-                                    ast.Set: ast.SetComp,
-                                    ast.Dict: ast.DictComp,
-                                }[type(elt.collection)]
-                                elt = elt.value
-                            elif isinstance(elt, ast.Expr) and isinstance(
-                                elt.value, ast.Yield
-                            ):
-                                cls = ast.GeneratorExp
-                                elt = elt.value.value
-                            else:
-                                raise Exception(
-                                    "Unexpected " + ast.dump(elt) + ", cls:" + str(cls)
-                                )
-
-                            if issubclass(cls, ast.DictComp):
-                                return ast.DictComp(
-                                    key=elt[0],
-                                    value=elt[1],
-                                    generators=generators,
-                                    ifs=[],
-                                )
-                            else:
-                                return cls(
-                                    elt=elt,
-                                    generators=generators,
-                                    ifs=[],
-                                )
-
                     assert len(func.body) == 2
-                    cls: Optional[Type[ast.AST]] = None
-                    tree = RewriteComprehensionArgs().visit(func)
+                    tree = RewriteComprehensionArgs(args=args).visit(func)
 
                     if len(func.body) == 1 or isinstance(func.body[1], ast.Return):
                         tree = func.body[0]
@@ -1347,12 +1109,8 @@ class Node:
                     ),
                 )
             elif node.opname == "CALL_FUNCTION_EX":
-                if node.arg & 0x01:
-                    kwargs = node.pop_stack()
-                    args = node.pop_stack()
-                else:
-                    kwargs = None
-                    args = node.pop_stack()
+                kwargs = node.pop_stack() if node.arg & 0x01 else None
+                args = node.pop_stack()
                 func = node.pop_stack()
                 if isinstance(kwargs, ast.Dict):
                     keywords = [
@@ -1376,8 +1134,6 @@ class Node:
                         keywords=keywords,
                     ),
                 )
-            elif node.opname == "NOP":
-                pass
             elif node.opname == "DUP_TOP":
                 node.add_stack(node.stack[-1])
             elif node.opname == "ROT_TWO":
@@ -1439,25 +1195,13 @@ class Node:
                 # if node.index > 0:
                 #    node.pop_stack()
                 pass
-            elif node.opname == "SETUP_LOOP":
-                # Python 3.7
-                raise Exception(
-                    "SETUP_LOOP code should have been removed during the "
-                    "graph initialization"
-                )
-            elif node.opname == "BREAK_LOOP":
-                # Python 3.7
-                raise Exception(
-                    "BREAK_LOOP code should have been removed during the "
-                    "graph initialization"
-                )
             else:
                 raise NotImplementedError(node.opname)
 
             # Handle while loops by detecting cycles of length 1
             prev_visited = [n for n in node.prev if n.visited]
             if DEBUG:
-                debug(
+                print(
                     "STACKS",
                     "node",
                     node,
@@ -1469,7 +1213,7 @@ class Node:
                     prev_visited[-1].stack if prev_visited else None,
                 )
             if DEBUG:
-                debug("LOOP HEADS", "node", node, "PREV", node.prev, "=>", loop_heads)
+                print("LOOP HEADS", "node", node, "PREV", node.prev, "=>", loop_heads)
             while not prev_visited or len(node.stack) <= len(prev_visited[-1].stack):
                 if root.container is not node:
                     prev = node.contract_backward()
@@ -1503,7 +1247,7 @@ class Node:
                 if DEBUG:
                     display(node.draw())
                 if DEBUG:
-                    debug(
+                    print(
                         "STACKS",
                         "node",
                         node,
@@ -1517,7 +1261,7 @@ class Node:
                 display(node.draw())
 
             if DEBUG:
-                debug("::: done", node, "|", node.next, node.jumps, "|", node.prev)
+                print("::: done", node, "|", node.next, node.jumps, "|", node.prev)
 
             if not node.next and not stop_on_jump:
                 if loop_heads:
@@ -1526,7 +1270,7 @@ class Node:
                         for n in node.jumps
                     }
                     if DEBUG:
-                        debug(
+                        print(
                             "CANDIDATE JUMPS",
                             node,
                             "=>",
@@ -1541,7 +1285,7 @@ class Node:
                         or (head is None and len(jump.prev) == 1)
                     ]
                     if DEBUG:
-                        debug(
+                        print(
                             "SAME LEVEL JUMPS",
                             node,
                             "=>",
@@ -1599,17 +1343,8 @@ class Node:
         """Decompile a code object"""
         while_fusions = {}
         node = self._run(while_fusions=while_fusions)
-
-        class WhileBreakFixer(ast.NodeTransformer):
-            def visit_Break(self, node):
-                if hasattr(node, "_loop_node") and node._loop_node in while_fusions:
-                    if DEBUG:
-                        debug("NODE BREAK", node, node._loop_node)
-                    return ast.Continue()
-                return node
-
         node.stmts = [
-            WhileBreakFixer().visit(RemoveLastContinue().visit(stmt))
+            WhileBreakFixer(while_fusions).visit(RemoveLastContinue().visit(stmt))
             for stmt in node.stmts
         ]
 
@@ -1783,7 +1518,7 @@ def process_store_(node: Node):
                 and get_origin(value)[1] <= get_origin(last_stmts[-1].targets)[1]
             )
             if DEBUG:
-                debug(
+                print(
                     f"ORIGIN of {ast.dump(value)}",
                     get_origin(value)[1],
                     f"vs ORIGIN of last {ast.dump(last_stmts[-1])}",
@@ -1793,7 +1528,7 @@ def process_store_(node: Node):
             is_multi_assignment = False
 
         if DEBUG:
-            debug(
+            print(
                 "VALUE",
                 value,
                 "LAST",
@@ -1871,7 +1606,7 @@ def process_try_(node, loop_heads, stop_nodes, while_fusions):
         )
     )
     if DEBUG:
-        debug(
+        print(
             "TRY BLOCK", node, "MEET", meet_nodes, "(STOP at", {*stop_nodes, node}, ")"
         )
     assert len(meet_nodes) <= 1
@@ -1907,9 +1642,9 @@ def process_try_(node, loop_heads, stop_nodes, while_fusions):
         finally_node = old_finally_node = None
 
     if DEBUG:
-        debug("TRY", node, "MEET", meet_nodes)
+        print("TRY", node, "MEET", meet_nodes)
     if DEBUG:
-        debug("TRY", node, "BEFORE succ", before, "-> AFTER succ", next_node, jump_node)
+        print("TRY", node, "BEFORE succ", before, "-> AFTER succ", next_node, jump_node)
 
     handlers = []
     finalbody = []
@@ -1995,15 +1730,15 @@ def process_try_(node, loop_heads, stop_nodes, while_fusions):
         if n and n.visited
     }
     if DEBUG:
-        debug("TRY SUCC", successors, "-", discarded_successors)
+        print("TRY SUCC", successors, "-", discarded_successors)
     if DEBUG:
-        debug("TRY PREV", node.prev)
+        print("TRY PREV", node.prev)
     successors = successors - discarded_successors
 
     jump_nodes = successors
     for succ in successors:
         if DEBUG:
-            debug(
+            print(
                 "TRY",
                 node,
                 ": REBINDING SUCCESSOR",
@@ -2023,54 +1758,10 @@ def process_try_(node, loop_heads, stop_nodes, while_fusions):
     node.next = None
     node.jumps = jump_nodes
     if DEBUG:
-        debug("TRY", node, node.stack)
+        print("TRY", node, node.stack)
 
     if DEBUG:
         display(node.draw())
-
-
-def prune_virtual_edges(root):
-    queue = [(root, 0)]
-    graph = set()
-
-    while queue:
-        node, level = queue.pop(0)
-        graph.add(node)
-
-        if node.virtual is None:
-            node.virtual = level
-        else:
-            new_level = min(node.virtual, level)
-            if new_level == node.virtual:
-                continue
-            node.virtual = new_level
-        if node.next and node.next_is_virtual:
-            queue.append((node.next, level + 1))
-        elif node.next:
-            queue.append((node.next, level))
-        for succ in node.jumps:
-            queue.append((succ, level))
-
-    for node in graph:
-        for prev in tuple(node.prev):
-            if (
-                prev.virtual
-                and node.virtual
-                and prev.virtual > node.virtual
-                and prev.next is node
-            ):
-                node.prev.discard(prev)
-                prev.next = None
-            if (
-                prev.virtual
-                and node.virtual
-                and prev.virtual
-                and prev.virtual == node.virtual
-                and prev.next_is_virtual
-                and prev.next is node
-            ):
-                node.prev.discard(prev)
-                prev.next = None
 
 
 def contract_jumps(root):
@@ -2117,7 +1808,6 @@ def rewire_break_loop(root):
             queue.append((jump_node, loop_jumps))
         elif node.opname == "BREAK_LOOP":
             node.opname = "JUMP_ABSOLUTE"
-            # node.next_is_virtual = True
             if node.next:
                 node.next.prev.discard(node)
                 node.next = None

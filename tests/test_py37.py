@@ -1,5 +1,3 @@
-import sys
-
 import pytest as pytest
 from utils import make_test_idem
 
@@ -807,9 +805,7 @@ def test_while_only_break():
     return None
 
 
-@pytest.mark.xfail(
-    sys.version_info >= (3, 9), reason="behavior is the same but bytecode differs"
-)
+@pytest.mark.xfail(reason="dead code changes the variable from local to free")
 @make_test_idem
 def test_while_true_if_if_continue_assign():
     while True:
@@ -820,9 +816,6 @@ def test_while_true_if_if_continue_assign():
     return z
 
 
-@pytest.mark.xfail(
-    sys.version_info >= (3, 9), reason="behavior is the same but bytecode differs"
-)
 @make_test_idem
 def test_while_true_if_if_continue():
     while True:
