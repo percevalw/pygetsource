@@ -62,6 +62,13 @@ def test_if():
 
 
 @make_test_idem
+def test_empty_if():
+    a = 1
+    if a == 1:
+        pass
+
+
+@make_test_idem
 def test_if_not():
     a = 1
     if not a == 1:

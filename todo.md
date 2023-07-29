@@ -176,7 +176,7 @@ Current supported opcodes and syntaxes
 - [x] Nonlocal: see `pygetsource.getfactory`
 - [x] Expr
 - [x] Pass | Break | Continue
-- [x] BoolOp
+- [ ] BoolOp
 - [ ] NamedExpr
 - [x] BinOp
 - [x] UnaryOp

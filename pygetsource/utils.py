@@ -1,8 +1,6 @@
 import ast
 import dis
-import functools
 import sys
-from collections import deque
 from typing import TypeVar
 
 try:
@@ -131,28 +129,3 @@ def get_origin(trees: ast.AST):
             except AttributeError:
                 pass
         return origin, offset
-
-
-def lowest_common_successors(*starts, stop_nodes=None):
-    if stop_nodes is None:
-        stop_nodes = set()
-
-    queues = [deque([s]) for s in starts]
-    visited = [{s} for s in starts]
-
-    while any(queues):
-        nodes = [q.popleft() if q else None for q in queues]
-        for i, node in enumerate(nodes):
-            if not node or node in stop_nodes:
-                continue
-            else:
-                successors = (node.next, *node.jumps)
-            for succ in successors:
-                if succ and succ not in visited[i] and not succ.visited:
-                    queues[i].append(succ)
-                    visited[i].add(succ)
-
-        common_nodes = functools.reduce(set.intersection, visited)
-        if common_nodes:
-            return common_nodes
-    return set()
