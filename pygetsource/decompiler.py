@@ -28,6 +28,9 @@ from .utils import (
     graph_sort,
     hasjabs,
     inplace_to_ast,
+    nb_binary_ops_to_ast,
+    nb_inplace_ops_to_ast,
+    no_ops,
     unaryop_to_ast,
 )
 
@@ -184,10 +187,7 @@ class Node:
         # If the node has a single predecessor, merge it with that node
 
         prev_node = next((n for n in self.prev if n.next is self), None)
-        assert prev_node and (
-            (len(self.prev) == 1)
-            or prev_node.opname in ("NOP",)  # and not prev_node.jumps) or
-        )
+        assert prev_node and len(self.prev) == 1
 
         prev_node._container = self._container
         if DEBUG:
@@ -278,25 +278,36 @@ class Node:
             opname = block.opname
             arg = block.arg
 
-            if opname in ("RETURN_VALUE",):
+            if opname == "RETURN_VALUE":
                 pass
             elif opname == "JUMP_FORWARD":
                 block.jumps.add(graph[block.offset + arg])
+            elif opname == "JUMP_BACKWARD":
+                block.jumps.add(graph[block.offset - arg])
             elif opname == "JUMP_ABSOLUTE":
                 block.jumps.add(graph[arg])
             elif opname in (
                 "POP_JUMP_IF_TRUE",
                 "POP_JUMP_IF_FALSE",
-                "JUMP_IF_TRUE_OR_POP",
-                "JUMP_IF_FALSE_OR_POP",
                 "JUMP_IF_NOT_EXC_MATCH",
             ):
                 block.next = graph[block.offset]
                 block.jumps.add(graph[arg])
             elif opname in (
+                "JUMP_IF_TRUE_OR_POP",
+                "JUMP_IF_FALSE_OR_POP",
+            ):
+                block.next = graph[block.offset]
+                if sys.version_info < (3, 11):
+                    block.jumps.add(graph[arg])
+                else:
+                    block.jumps.add(graph[block.offset + arg])
+            elif opname in (
                 "FOR_ITER",
                 "SETUP_FINALLY",
                 "SETUP_LOOP",
+                "POP_JUMP_FORWARD_IF_FALSE",
+                "POP_JUMP_FORWARD_IF_TRUE",
             ):
                 block.next = graph[block.offset]
 
@@ -304,6 +315,12 @@ class Node:
                     block.jumps.add(graph[block.offset + arg + 2])
                 else:
                     block.jumps.add(graph[block.offset + arg])
+            elif opname in (
+                "POP_JUMP_BACKWARD_IF_FALSE",
+                "POP_JUMP_BACKWARD_IF_TRUE",
+            ):
+                block.next = graph[block.offset]
+                block.jumps.add(graph[block.offset - arg])
             else:
                 if block.offset in graph:
                     block.next = graph[block.offset]
@@ -319,13 +336,7 @@ class Node:
         index = 0
         sorted_nodes = []
         for node in graph_sort(root):
-            if (
-                node.opname == "NOP"
-                or node.opname == "RERAISE"
-                and node.arg == 0
-                or node.opname == "POP_BLOCK"
-                or node.opname == "SETUP_LOOP"
-            ):
+            if node.opname in no_ops or node.opname == "RERAISE" and node.arg == 0:
                 if node.next:
                     for n in node.prev:
                         if n.next is node:
@@ -344,6 +355,10 @@ class Node:
             node.prev &= graph_nodes
             node._origin_jumps = node.jumps
             node._origin_next = node.next
+
+            if "JUMP_" in node.opname and "_IF_" in node.opname:
+                if node.next in node.jumps or len(node.jumps) == 0:
+                    node.jumps = {node.next}
         # detect_loops(sorted_nodes[0])
 
         root = sorted_nodes[0]
@@ -365,15 +380,27 @@ class Node:
             if opname == "FAST":
                 return self.code.co_varnames[self.arg]
             elif opname in ("NAME", "GLOBAL"):
+                if opname == "GLOBAL" and sys.version_info >= (3, 11):
+                    return ("NULL+" if self.arg & 1 else "") + self.code.co_names[
+                        self.arg >> 1
+                    ]
                 return self.code.co_names[self.arg]
             elif opname == "DEREF":
-                return (self.code.co_cellvars + self.code.co_freevars)[self.arg]
+                if sys.version_info < (3, 11):
+                    return (self.code.co_cellvars + self.code.co_freevars)[self.arg]
+                else:
+                    return (self.code.co_cellvars + self.code.co_freevars)[
+                        self.arg - len(self.code.co_varnames)
+                    ]
+
             elif opname == "CONST":
                 return repr(self.code.co_consts[self.arg])
             elif opname in ("ATTR", "METHOD"):
                 return self.code.co_names[self.arg]
         elif opname.startswith("COMPARE_OP"):
             return dis.cmp_op[self.arg]
+        elif opname.startswith("BINARY_OP"):
+            return dis._nb_ops[self.arg][1]
         else:
             return self.arg
 
@@ -475,6 +502,7 @@ class Node:
         Convert the graph into an AST
         """
         root = node
+        kw_names = ()
 
         if not node.is_ready or node.visited:
             return None
@@ -531,7 +559,7 @@ class Node:
                 node.add_stmt(ast.Delete([node.pop_stack()]))
             elif node.opname == "RETURN_VALUE":
                 node.add_stmt(ast.Return(node.pop_stack()))
-            elif node.opname in ("JUMP_FORWARD", "JUMP_ABSOLUTE"):
+            elif node.opname in ("JUMP_FORWARD", "JUMP_ABSOLUTE", "JUMP_BACKWARD"):
                 jump = next(iter(node.jumps))
 
                 # If we don't leave any loop
@@ -577,12 +605,8 @@ class Node:
                                 loop_heads,
                             )
                         node.add_stmt(ast.Break(_loop_node=jump))
-            elif node.opname in (
-                "POP_JUMP_IF_TRUE",
-                "JUMP_IF_TRUE_OR_POP",
-                "POP_JUMP_IF_FALSE",
-                "JUMP_IF_FALSE_OR_POP",
-                "JUMP_IF_NOT_EXC_MATCH",
+            elif node.opname.startswith("POP_JUMP") or node.opname.startswith(
+                "JUMP_IF"
             ):
                 if node.opname == "JUMP_IF_NOT_EXC_MATCH":
                     test = ExceptionMatch(node.pop_stack())
@@ -684,10 +708,9 @@ class Node:
                             test_prev,
                             astunparse.unparse(test_prev.test_wip),
                         )
-                    if next(iter(node.jumps)) in test_prev.jumps and node.opname in (
-                        "POP_JUMP_IF_TRUE",
-                        "POP_JUMP_IF_FALSE",
-                    ):
+                    if next(
+                        iter(node.jumps)
+                    ) in test_prev.jumps and node.opname.startswith("POP_JUMP"):
                         node.remove()
                         if "IF_TRUE" in node.opname:
                             test_prev.opname = test_prev.opname.replace(
@@ -982,6 +1005,21 @@ class Node:
                         comparators=[right],
                     ),
                 )
+            elif node.opname == "BINARY_OP":
+                right = node.pop_stack()
+                left = node.pop_stack()
+                if node.arg in nb_binary_ops_to_ast:
+                    node.add_stack(
+                        ast.BinOp(
+                            left=left, op=nb_binary_ops_to_ast[node.arg], right=right
+                        ),
+                    )
+                else:
+                    node.add_stack(
+                        ast.AugAssign(
+                            target=left, op=nb_inplace_ops_to_ast[node.arg], value=right
+                        ),
+                    )
             elif node.opname in binop_to_ast:
                 right = node.pop_stack()
                 left = node.pop_stack()
@@ -1179,7 +1217,8 @@ class Node:
                 node.add_stmt(ast.Expr(ast.Yield(node.pop_stack())))
             elif node.opname == "MAKE_FUNCTION":
                 assert node.arg in (0, 8), node.arg
-                node.pop_stack()  # function name
+                if sys.version_info < (3, 11):
+                    node.pop_stack()  # function name
                 func_code: ast.Constant = node.pop_stack()
                 if node.arg == 8:
                     node.pop_stack()
@@ -1210,7 +1249,19 @@ class Node:
                         returns=None,
                     )
                 )
-            elif node.opname in ("CALL_FUNCTION", "CALL_METHOD"):
+            elif node.opname == "KW_NAMES":
+                kw_names = node.code.co_consts[node.arg]
+                print("KWNAMES", kw_names)
+            elif node.opname in ("CALL_FUNCTION", "CALL_METHOD", "CALL"):
+                if (
+                    node.arg == 0
+                    and node.opname == "CALL"
+                    and sys.version_info >= (3, 11)
+                    and len(node.stack) >= 2
+                    and isinstance(node.stack[-2], ast.FunctionDef)
+                ):
+                    # WEIRD python 3.11 behavior with lambdas ?
+                    node.arg = 1
                 args = [node.pop_stack() for _ in range(node.arg)][::-1]
                 func = node.pop_stack()
                 if isinstance(func, ast.FunctionDef):
@@ -1225,10 +1276,14 @@ class Node:
                     node.add_stack(
                         ast.Call(
                             func=func,
-                            args=args,
-                            keywords=[],
+                            args=args[: len(args) - len(kw_names)],
+                            keywords=[
+                                ast.keyword(arg=key, value=value)
+                                for key, value in zip(kw_names, args[-len(kw_names) :])
+                            ],
                         ),
                     )
+                    kw_names = ()
             elif node.opname == "CALL_FUNCTION_KW":
                 keys = node.pop_stack().value
                 values = [node.pop_stack() for _ in range(len(keys))][::-1]
@@ -1285,8 +1340,17 @@ class Node:
                 item = node.pop_stack()
                 if item and not getattr(item, "_dumped", False):
                     node.add_stmt(ast.Expr(item))
+            elif node.opname == "COPY":
+                node.stack.append(node.stack[-node.arg])
+            elif node.opname == "SWAP":
+                (node.stack[-1], node.stack[-node.arg]) = (
+                    node.stack[-node.arg],
+                    node.stack[-1],
+                )
             elif node.opname == "POP_EXCEPT":
                 node.pop_stack()
+            elif node.opname == "RETURN_GENERATOR":
+                node.add_stack(None)
             elif node.opname == "FORMAT_VALUE":
                 fmt_spec = None
                 conversion = -1
@@ -1555,16 +1619,30 @@ def process_binding_(node, save_origin=True):
             )
         )
     elif opname in ("NAME", "GLOBAL"):
-        node.add_stack(
-            ast.Name(
-                id=code.co_names[arg],
-                **origin,
+        if opname == "GLOBAL" and sys.version_info >= (3, 11):
+            # if arg & 1:
+            #    node.add_stack(ast.Constant(None))
+            node.add_stack(
+                ast.Name(
+                    id=code.co_names[arg >> 1],
+                    **origin,
+                )
             )
-        )
+        else:
+            node.add_stack(
+                ast.Name(
+                    id=code.co_names[arg],
+                    **origin,
+                )
+            )
     elif opname == "DEREF":
+        if sys.version_info < (3, 11):
+            name = (code.co_cellvars + code.co_freevars)[arg]
+        else:
+            name = (code.co_cellvars + code.co_freevars)[arg - len(code.co_varnames)]
         node.add_stack(
             ast.Name(
-                id=(code.co_cellvars + code.co_freevars)[arg],
+                id=name,
                 **origin,
             )
         )

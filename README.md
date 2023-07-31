@@ -7,7 +7,7 @@
 
 # pygetsource
 
-`pygetsource` is a Python decompiler, aiming to convert compiled bytecode instructions back into Python code.
+`pygetsource` is a decompiler for Python 3, aiming to convert compiled bytecode instructions back into Python code.
 
 ## Overview
 
@@ -28,7 +28,7 @@ The latter form is typically stored in `.pyc` files and in the `__code__` attrib
 
 The project takes its name from the `inspect.getsource` function, which returns the source code of a function, but it is not always applicable, as explained above.
 
-`pygetsource` is still in development. It should be able to recover the source code of simple functions for various programs from Python 3.7 to Python 3.10. It is not yet able to recover the source code of classes, import statements, try/except/match/with blocks, and does not support Python 2. While functional, the codebase has not been optimized and is in need of significant refactoring.
+`pygetsource` is still in development. It should be able to recover the source code of simple functions for various programs from Python 3.7 to Python 3.11. It is not yet able to recover the source code of classes, import statements, try/except/match/with blocks, and does not support Python 2. While functional, the codebase has not been optimized and is in need of significant refactoring.
 
 Finally, this software is distributed under the permissive MIT license.
 
@@ -90,7 +90,7 @@ Notice how the `else` statement was added to the `elif` statement, yet the two p
 
 ## Alternatives
 
-[uncompyle6](https://github.com/rocky/python-uncompyle6) is a Python decompiler that supports Python 2 and 3 up to Python 3.8. It uses a grammar-based approach to rebuild code from bytecode patterns. This approach is less effective for higher versions that introduce various bytecode optimizations, especially regarding complex control structures like loops, or the example given above.
+[uncompyle6](https://github.com/rocky/python-uncompyle6) is a Python decompiler that supports Python 2 and 3 up to Python 3.8. It uses a grammar-based approach to rebuild code from bytecode patterns. This approach is less effective for higher versions that introduce various bytecode optimizations, especially regarding complex control structures like loops, or the example given above. At the moment, it supports a larger range of Python syntaxes (such as with blocks or try/excepts).
 It is also licensed under a copyleft GPL license, making it less suitable for larger projects with permissive licenses.
 
 [decompyle++ (pycdc)](https://github.com/zrax/pycdc) uses a state machine approach to build an AST iteratively by processing bytecode instructions. It's written in C++ and supports more Python versions than uncompyle6, but has more trouble decompiling  complex control structures like nested loops, break patterns, comprehensions, or the example given above. It also uses the copyleft GPL license.
@@ -98,7 +98,8 @@ It is also licensed under a copyleft GPL license, making it less suitable for la
 ## How does it work ?
 
 `pygetsource` uses a distinct approach. The bytecode instructions are initially converted into a directed graph, representing the program's flow. This graph is then iteratively reduced, processing each node based on its opcode, argument, and position and generating the [AST](https://docs.python.org/3/library/ast.html) as it goes.
-This method allows us to rely more on high-level patterns and less on Python’s idiosyncrasies when recreating complex structures like nested loops or break/return statements.
+This method allows us to rely more on high-level patterns and less on Python’s idiosyncrasies when recreating complex structures like nested loops or break/return statements, and handle Python versions from 3.7 to 3.11 with the same codebase.
+
 In constrast with [uncompyle6](https://github.com/rocky/python-uncompyle6) and [pycdc](https://github.com/zrax/pycdc), `pygetsource` uses the `ast` and `astunparse` libraries to generate the source code from the generated AST.
 
 Here is an example of a graph being reduced:
