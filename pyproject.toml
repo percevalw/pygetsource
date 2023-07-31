@@ -1,6 +1,6 @@
 [project]
 name = "pygetsource"
-description = "Decompiler written in Python for Python"
+description = "A Python 3 decompiler"
 authors = [
     { name = "Perceval Wajsburt", email = "perceval.wajsburt@gmail.com" }
 ]
@@ -12,6 +12,23 @@ dynamic = ["version"]
 requires-python = ">=3.7,<4.0"
 dependencies = [
     "astunparse",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.7",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Software Development :: Code Generators",
+    "Topic :: Software Development :: Disassemblers",
+    "Topic :: Software Development :: Pre-processors",
+    "Topic :: Utilities",
 ]
 
 [tool.setuptools.packages.find]

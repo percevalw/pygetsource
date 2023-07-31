@@ -26,6 +26,45 @@ binop_to_ast = {
     "BINARY_OR": ast.BitOr(),
 }
 
+if sys.version_info >= (3, 11):
+    nb_ops_map = {sign: i for i, (name, sign) in enumerate(dis._nb_ops)}
+
+    nb_inplace_ops_to_ast = {
+        nb_ops_map["+="]: ast.Add(),
+        nb_ops_map["&="]: ast.BitAnd(),
+        nb_ops_map["//="]: ast.FloorDiv(),
+        nb_ops_map["<<="]: ast.LShift(),
+        nb_ops_map["@="]: ast.MatMult(),
+        nb_ops_map["*="]: ast.Mult(),
+        nb_ops_map["%="]: ast.Mod(),
+        nb_ops_map["|="]: ast.BitOr(),
+        nb_ops_map["**="]: ast.Pow(),
+        nb_ops_map[">>="]: ast.RShift(),
+        nb_ops_map["-="]: ast.Sub(),
+        nb_ops_map["/="]: ast.Div(),
+        nb_ops_map["^="]: ast.BitXor(),
+    }
+
+    nb_binary_ops_to_ast = {
+        nb_ops_map["+"]: ast.Add(),
+        nb_ops_map["&"]: ast.BitAnd(),
+        nb_ops_map["//"]: ast.FloorDiv(),
+        nb_ops_map["<<"]: ast.LShift(),
+        nb_ops_map["@"]: ast.MatMult(),
+        nb_ops_map["*"]: ast.Mult(),
+        nb_ops_map["%"]: ast.Mod(),
+        nb_ops_map["|"]: ast.BitOr(),
+        nb_ops_map["**"]: ast.Pow(),
+        nb_ops_map[">>"]: ast.RShift(),
+        nb_ops_map["-"]: ast.Sub(),
+        nb_ops_map["/"]: ast.Div(),
+        nb_ops_map["^"]: ast.BitXor(),
+    }
+else:
+    nb_ops_map = {}
+    nb_inplace_ops_to_ast = {}
+    nb_binary_ops_to_ast = {}
+
 unaryop_to_ast = {
     "UNARY_POSITIVE": ast.UAdd(),
     "UNARY_NEGATIVE": ast.USub(),
@@ -71,11 +110,28 @@ hasjabs = [
     "FOR_ITER",
     "POP_JUMP_IF_FALSE",
     "POP_JUMP_IF_TRUE",
+    "POP_JUMP_FORWARD_IF_FALSE",
+    "POP_JUMP_FORWARD_IF_TRUE",
+    "POP_JUMP_BACKWARD_IF_FALSE",
+    "POP_JUMP_BACKWARD_IF_TRUE",
     "JUMP_FORWARD",
+    "JUMP_BACKWARD",
     "JUMP_IF_FALSE_OR_POP",
     "JUMP_IF_TRUE_OR_POP",
     "JUMP_IF_NOT_EXC_MATCH",
     "SETUP_FINALLY",
+]
+
+no_ops = [
+    "NOP",
+    "POP_BLOCK",
+    "SETUP_LOOP",
+    "RESUME",
+    "CACHE",
+    "PRECALL",
+    "PUSH_NULL",
+    "MAKE_CELL",
+    "COPY_FREE_VARS",
 ]
 
 
