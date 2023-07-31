@@ -830,3 +830,143 @@ def test_while_true_if_if_continue():
             if y:
                 continue
         return line
+
+
+@make_test_idem
+def test_while_test_if_else_break():
+    while test:
+        if a:
+            x = 2
+        else:
+            x = 3
+            break
+    return "a"
+
+
+@make_test_idem
+def test_while_if_if_elif_else():
+    while test:
+        if a:
+            if i == 0:
+                x = 1
+            elif i == 1:
+                x = 0
+                break
+            else:
+                i = 3
+                continue
+
+    x = 2
+    y = 3
+    return "a"
+
+
+@make_test_idem
+def test_while_while_if():
+    while z:
+        while test:
+            if i == 0:
+                x = 1
+            elif i == 1:
+                x = 0
+                continue
+            else:
+                i = 3
+                continue
+
+    u = 3
+    return u
+
+
+@make_test_idem
+def test_if_and_else():
+    if x and y:
+        x = 3
+    else:
+        y = 3
+
+    a = 3
+    return a
+
+
+@make_test_idem
+def test_if_and():
+    if x and y:
+        return 1
+
+
+@make_test_idem
+def test_if_or_else():
+    if x or y:
+        x = 3
+    else:
+        y = 3
+
+    a = 3
+    return a
+
+
+@make_test_idem
+def test_if_or():
+    if x or y:
+        return 1
+
+
+@make_test_idem
+def test_if_mix_bool_else():
+    if (x or y or z) and (a or b):
+        x = 3
+    else:
+        y = 3
+
+
+@make_test_idem
+def test_if_mix_bool_2_else():
+    if (x and y and z) or (a and b):
+        x = 3
+    else:
+        y = 3
+
+
+@make_test_idem
+def test_while_bool():
+    while a and b:
+        x = 2
+
+    u = 3
+    return "u"
+
+
+@make_test_idem
+def test_while_while_bool():
+    while a and b:
+        while test:
+            x = 2
+
+    u = 3
+    return "u"
+
+
+@make_test_idem
+def test_while_while_bool_mix():
+    while (x and y and z) or (a and b):
+        while test:
+            x = 2
+
+    u = 3
+    return "u"
+
+
+@make_test_idem
+def test_bool_and_of_or_assign():
+    z = (x and y and z) or (a and b) or (c and d)
+
+
+@make_test_idem
+def test_bool_or_of_and_assign():
+    z = (x or y or z) and (a or b) and (c or d)
+
+
+@make_test_idem
+def test_bool_target_in_comprehension():
+    return [(x or y or z) and (a or b) and (c or d) for i in range(10)]

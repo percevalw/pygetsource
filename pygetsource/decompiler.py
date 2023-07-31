@@ -16,11 +16,15 @@ from .ast_utils import (
     RewriteComprehensionArgs,
     Unpacking,
     WhileBreakFixer,
+    get_origin,
+    make_bool_op,
+    negate,
+    remove_from_parent,
+    walk_with_parent,
 )
 from .utils import (
     binop_to_ast,
     compareop_to_ast,
-    get_origin,
     graph_sort,
     hasjabs,
     inplace_to_ast,
@@ -83,18 +87,25 @@ class Node:
         self.visited: bool = False
         self.loops = set()
         self.is_conditional_while = False
-        self.jump_test = None
         self._container = self
+
+        # To build boolean expressions
+        self.test_wip = None
 
     @property
     def container(self):
-        if self._container is not self:
-            self._container = self._container.container
-        return self._container
+        if self._container is self:
+            return self
+        return self._container.container
 
     @property
     def successors(self):
         return set((self.next, *self.jumps) if self.next else self.jumps)
+
+    @property
+    def jump(self):
+        [jump] = self.jumps
+        return jump
 
     def add_stmt(self, stmt):
         if DEBUG:
@@ -112,7 +123,14 @@ class Node:
 
     def add_stack(self, item):
         if DEBUG:
-            print("Add stack", self, ":", item)
+            print("Add stack", self, end=": ")
+            if item:
+                try:
+                    print(astunparse.unparse(ast.fix_missing_locations(item)))
+                except Exception:
+                    warn("Could not unparse", ast.dump(item), "in", self)
+            else:
+                print(item)
         self.stack.append(item)
 
     def pop_stack(self):
@@ -149,7 +167,7 @@ class Node:
             pred.jumps.discard(self)
             if pred.next is self:
                 pred.next = self.next
-                pred.jumps.discard(self.next)
+                pred.jumps.discard(pred.next)
             pred.jumps.discard(pred.next)
 
     def unlink_successor(self, other):
@@ -269,6 +287,8 @@ class Node:
             elif opname in (
                 "POP_JUMP_IF_TRUE",
                 "POP_JUMP_IF_FALSE",
+                "JUMP_IF_TRUE_OR_POP",
+                "JUMP_IF_FALSE_OR_POP",
                 "JUMP_IF_NOT_EXC_MATCH",
             ):
                 block.next = graph[block.offset]
@@ -322,6 +342,8 @@ class Node:
         graph_nodes = set(sorted_nodes)
         for node in sorted_nodes:
             node.prev &= graph_nodes
+            node._origin_jumps = node.jumps
+            node._origin_next = node.next
         # detect_loops(sorted_nodes[0])
 
         root = sorted_nodes[0]
@@ -430,11 +452,12 @@ class Node:
         if len(prev_visited) != 1:
             return self.stmts
         prev = next(iter(prev_visited), None)
-        return prev.last_stmts()
+        if prev is self:
+            return prev.last_stmts()
 
     @property
     def is_ready(self):
-        if sum([prev.visited for prev in self.prev]) > 1:
+        if sum([prev.visited for prev in self.prev if prev is not self]) > 1:
             return False
         if any(not prev.visited and prev.index < self.index for prev in self.prev):
             return False
@@ -444,7 +467,7 @@ class Node:
     def _run(
         node: "Node",
         loop_heads: Tuple["Node"] = (),
-        while_fusions={},
+        while_fusions=set(),
         stop_on_jump: bool = False,
         bool_stack=(),
     ):
@@ -453,10 +476,7 @@ class Node:
         """
         root = node
 
-        if node.visited:
-            return None
-
-        if not node.is_ready:
+        if not node.is_ready or node.visited:
             return None
 
         while True:
@@ -515,7 +535,7 @@ class Node:
                 jump = next(iter(node.jumps))
 
                 # If we don't leave any loop
-                loop_head = explore_until(jump, stop_nodes=loop_heads)
+                loop_head = explore_until(jump, stop_nodes=loop_heads[::-1])
                 same_context = (
                     not loop_heads
                     or loop_head is loop_heads[-1]
@@ -524,15 +544,44 @@ class Node:
                 )
                 if jump.visited:
                     if same_context:
+                        if DEBUG:
+                            print(
+                                "JUMP",
+                                node,
+                                "VISITED SAME CONTEXT",
+                                loop_head,
+                                "vs",
+                                loop_heads,
+                            )
                         node.add_stmt(ast.Continue(_loop_node=jump))
                     else:
+                        if DEBUG:
+                            print(
+                                "JUMP",
+                                node,
+                                "VISITED NOT SAME CONTEXT",
+                                loop_head,
+                                "vs",
+                                loop_heads,
+                            )
                         node.add_stmt(ast.Break(_loop_node=jump))
                 else:
                     if not same_context:
+                        if DEBUG:
+                            print(
+                                "JUMP",
+                                node,
+                                "NOT VISITED NOT SAME CONTEXT",
+                                loop_head,
+                                "vs",
+                                loop_heads,
+                            )
                         node.add_stmt(ast.Break(_loop_node=jump))
             elif node.opname in (
                 "POP_JUMP_IF_TRUE",
+                "JUMP_IF_TRUE_OR_POP",
                 "POP_JUMP_IF_FALSE",
+                "JUMP_IF_FALSE_OR_POP",
                 "JUMP_IF_NOT_EXC_MATCH",
             ):
                 if node.opname == "JUMP_IF_NOT_EXC_MATCH":
@@ -540,199 +589,308 @@ class Node:
                     node.pop_stack()
                 else:
                     test = node.pop_stack()
-                node.jump_test = test
-                test_origin = get_origin(test)[0].container
+
+                if DEBUG:
+                    print("BASE TEST", astunparse.unparse(test))
+                test = negate(test) if "IF_TRUE" in node.opname else test
+                if DEBUG:
+                    print("MOD  TEST", astunparse.unparse(test))
+
+                node.test_wip = test
+                test_origin = get_origin(test).container
+                test_prev = next(iter(test_origin.prev), None)
+
+                # if test_origin.stmts and isinstance(test_origin.stmts[-1], ast.Assign):
+                #     stmt = test_origin.stmts.pop()
+                #     test = ast.NamedExpr(
+                #         stmt.targets[0],
+                #         stmt.value,
+                #     )
 
                 if_node = node.next
                 [else_node] = node.jumps
 
-                old_if_node = if_node
+                if_node = if_node._run(
+                    loop_heads=loop_heads,
+                    while_fusions=while_fusions,
+                )
+                else_node = else_node._run(
+                    loop_heads=loop_heads,
+                    while_fusions=while_fusions,
+                )
 
-                ################
-                # SPECIAL CASE #
-                ################
-
-                if loop_heads:
-                    real_branch = next(
-                        (n for n in loop_heads[-1].prev if n.next is loop_heads[-1]),
-                        None,
-                    )
-                else:
-                    real_branch = None
-                if (
-                    real_branch
-                    and real_branch.jump_test
-                    and (
-                        node.opname == "POP_JUMP_IF_TRUE"
-                        and real_branch.opname == "POP_JUMP_IF_FALSE"
-                        or node.opname == "POP_JUMP_IF_FALSE"
-                        and real_branch.opname == "POP_JUMP_IF_TRUE"
-                    )
-                    and ast.dump(real_branch.jump_test) == ast.dump(test)
-                ):
-                    real_head = get_origin(real_branch.jump_test)[0].container
-
-                    if DEBUG:
-                        print("THIS SHOULD BE A CONDITIONAL WHILE LOOP", ast.dump(test))
-                    # node.add_stmt(ast.Continue())
-                    node.next.prev.discard(node)
-                    node.next = None
-                    node.jumps = {real_head}
-                    node.add_stmt(ast.Continue())
-                    else_node.prev.remove(node)
-                    real_head.prev.add(node)
-                    real_head_jump = next(iter(real_head.jumps))
-                    node.next = real_head_jump
-                    real_head_jump.prev.add(node)
-                    real_branch.is_conditional_while = True
-                    while_fusions[real_head] = else_node
-                    loop_heads = loop_heads[:-1]
-                    if loop_heads and loop_heads[-1] is not real_head:
-                        loop_heads = (*loop_heads, real_head)
-                ################
-                else:
-                    if_loop_head = (
-                        explore_until(if_node, loop_heads) if loop_heads else None
-                    )
-                    else_loop_head = (
-                        explore_until(else_node, loop_heads) if loop_heads else None
-                    )
-
-                    if_node = if_node._run(
-                        loop_heads=loop_heads,
-                        while_fusions=while_fusions,
-                    )
-                    else_node = else_node._run(
-                        loop_heads=loop_heads,
-                        while_fusions=while_fusions,
-                    )
-
-                    if DEBUG:
-                        display(node.draw())
-
-                    if_item = (
-                        if_node.pop_stack()
-                        if if_node and len(if_node.stack) > len(node.stack)
-                        else None
-                    )
-                    else_item = (
-                        else_node.pop_stack()
-                        if else_node and len(else_node.stack) > len(node.stack)
-                        else None
-                    )
-
-                    has_been_unparsed = False
-                    if (
-                        loop_heads
-                        and if_loop_head is loop_heads[-1]
-                        and test_origin is if_loop_head
-                        and (
-                            (if_node or old_if_node).next is if_loop_head
-                            or old_if_node.next is if_loop_head
+                if_node = node.next if if_node else None
+                else_node = node.jump if else_node else None
+                while True:
+                    keep_going = False
+                    if node.next.is_ready and not node.next.visited:
+                        if_node = node.next._run(
+                            loop_heads=loop_heads,
+                            while_fusions=while_fusions,
                         )
-                        and else_loop_head is not loop_heads[-1]
-                    ) or node.is_conditional_while:
-                        if DEBUG:
-                            print(
-                                "THIS IS A WHILE X LOOP",
-                                node,
-                                "LOOP HEAD",
-                                if_loop_head,
+                        keep_going = True
+                    if node.jump.is_ready and not node.jump.visited:
+                        else_node = node.jump._run(
+                            loop_heads=loop_heads,
+                            while_fusions=while_fusions,
+                        )
+                        keep_going = True
+                    if not keep_going:
+                        break
+
+                if DEBUG:
+                    print("DONE processing branches", node)
+                    print(">> if_node", if_node, node.next)
+                    print(">> else_node", else_node, node.jump)
+
+                if_node = (
+                    node.next
+                    if node.next.is_ready
+                    and node.next.visited
+                    and node.next.index > node.index
+                    else None
+                )
+                else_node = (
+                    node.jump
+                    if node.jump.is_ready
+                    and node.jump.visited
+                    and node.jump.index > node.index
+                    else None
+                )
+
+                branches_meet = (
+                    if_node
+                    and else_node
+                    and if_node.next is else_node.next
+                    and if_node.next
+                    and else_node.next
+                )
+
+                test = node.test_wip
+                node.test_wip = None
+
+                if (
+                    test_prev
+                    and test_prev.test_wip
+                    and len(node.jumps) == 1
+                    # and node.jump not in node.prev
+                    and node not in node.successors
+                    and test_prev.index < node.index
+                ):
+                    if DEBUG:
+                        print(
+                            "BOOL OP !",
+                            node,
+                            test_prev,
+                            astunparse.unparse(test_prev.test_wip),
+                        )
+                    if next(iter(node.jumps)) in test_prev.jumps and node.opname in (
+                        "POP_JUMP_IF_TRUE",
+                        "POP_JUMP_IF_FALSE",
+                    ):
+                        node.remove()
+                        if "IF_TRUE" in node.opname:
+                            test_prev.opname = test_prev.opname.replace(
+                                "IF_FALSE", "IF_TRUE"
                             )
-                        # while node.contract_backward():
-                        #     print("NODE IS CONTRACTED", node, "==?", if_node.next)
-                        #     if DEBUG:
-                        #         display(node.draw())
-                        #     pass
-                        body_stmts = if_node.stmts if if_node else []
-                        if isinstance(body_stmts[-1], ast.Continue):
-                            body_stmts = body_stmts[:-1]
-                        body_stmts = body_stmts or [ast.Pass()]
+                        else:
+                            test_prev.opname = test_prev.opname.replace(
+                                "IF_TRUE", "IF_FALSE"
+                            )
+
+                        node._container = test_prev
+                        test_prev.test_wip = make_bool_op(
+                            ast.And(),
+                            [test_prev.test_wip, test],
+                        )
+                        if DEBUG:
+                            print(">>", node, astunparse.unparse(test_prev.test_wip))
+                            display(node.draw())
+                        return if_node
+                    elif node.next in test_prev.jumps:
+                        node.remove()
+                        if "IF_TRUE" in node.opname:
+                            test_prev.opname = test_prev.opname.replace(
+                                "IF_FALSE", "IF_TRUE"
+                            )
+                        else:
+                            test_prev.opname = test_prev.opname.replace(
+                                "IF_TRUE", "IF_FALSE"
+                            )
+                        node._container = test_prev
+                        test_prev.test_wip = make_bool_op(
+                            ast.Or(),
+                            [
+                                negate(
+                                    test_prev.test_wip
+                                ),  # if node.opname.startswith("POP_JUMP") else test_prev.test_wip,
+                                test,
+                            ],
+                        )
+                        if DEBUG:
+                            print(">>", node, astunparse.unparse(test_prev.test_wip))
+                            display(node.draw())
+                        return else_node
+                if (
+                    if_node
+                    and if_node.stmts
+                    and isinstance(if_node.stmts[0], ast.While)
+                    # if_node.stmts and isinstance(if_node.stmts[-1].body[], ast.If)
+                ):
+                    stmt = if_node.stmts[0]
+                    if ast.dump(stmt.test) != ast.dump(ast.Constant(True)):
+                        stmt = ast.While(
+                            test=ast.Constant(True),
+                            body=[
+                                ast.If(
+                                    test=stmt.test,
+                                    body=stmt.body,
+                                    orelse=if_node.stmts[1:],
+                                )
+                            ],
+                        )
+
+                    found = False
+                    for parent, tree in walk_with_parent(stmt):
+                        if not isinstance(tree, ast.If):
+                            continue
+                        try:
+                            jump = next(iter(tree._origin_node._origin_jumps))
+                            if not any(n.container is not node for n in jump.prev):
+                                continue
+
+                            if ast.dump(negate(test)) != ast.dump(tree.test):
+                                if DEBUG:
+                                    print("DO WHILE PY310 TEST DID NOT MATCH:")
+                                    print(
+                                        (
+                                            ast.unparse(test),
+                                            ast.unparse(negate(tree.test)),
+                                        )
+                                    )
+                                continue
+
+                            remove_from_parent(tree, parent)
+                            while_fusions.add(node)  # [tree._origin_node] = node
+                            found = True
+
+                        except (AttributeError, ValueError):
+                            pass
+
+                    if found:
+                        node.is_conditional_while = True
+                        if_node.stmts = stmt.body
+                        # if_node.jumps.discard(if_node)
+                        if_node.jumps.add(node)
+                        node.prev.add(if_node)
+
+                if DEBUG:
+                    display(node.draw())
+
+                if_item = (
+                    if_node.pop_stack()
+                    if if_node and len(if_node.stack) > len(node.stack)
+                    else None
+                )
+                else_item = (
+                    else_node.pop_stack()
+                    if else_node and len(else_node.stack) > len(node.stack)
+                    else None
+                )
+
+                if_loop_head = (
+                    explore_until(node.next, loop_heads[::-1]) if loop_heads else None
+                )
+                else_loop_head = (
+                    explore_until(node.jump, loop_heads[::-1]) if loop_heads else None
+                )
+
+                if if_item is None or not if_node or if_node.stmts:
+
+                    is_loop = node.is_conditional_while or node in node.next.successors
+
+                    body_stmts = []
+                    if if_node and if_node.stmts:
+                        body_stmts.extend(if_node.stmts)
+                    else:
+                        body_stmts.append(ast.Pass())
+
+                    orelse_stmts = []
+                    if else_node and else_node.stmts:
+                        orelse_stmts.extend(else_node.stmts)
+                    # elif (
+                    #     not branches_meet
+                    #     and loop_heads
+                    #     and else_loop_head is not loop_heads[-1]
+                    #     and not is_loop
+                    # ):
+                    #     orelse_stmts.append(
+                    #         ast.Break(_loop_node=else_loop_head)
+                    #     )
+
+                    if is_loop:
+                        if len(orelse_stmts) == 1 and isinstance(
+                            orelse_stmts[0], ast.Break
+                        ):
+                            orelse_stmts = []
+
+                    has_else = bool(branches_meet) or else_loop_head is not if_loop_head
+
+                    if DEBUG:
+                        print("IS THIS WHILE ?")
+                        print(
+                            "CHECK: node in node.next.successors",
+                            node in node.next.successors,
+                        )
+                        print("ELSE LOOP HEAD", else_loop_head, loop_heads)
+                    if is_loop and (len(orelse_stmts) == 0 or else_loop_head is None):
                         node.add_stmt(
                             ast.While(
-                                test=(
-                                    test
-                                    if node.opname != "POP_JUMP_IF_TRUE"
-                                    else ast.UnaryOp(
-                                        op=ast.Not(),
-                                        operand=test,
-                                    )
-                                ),
+                                test=test,
                                 body=body_stmts,
                                 orelse=[],
-                                _loop_head=if_loop_head,
+                                _origin_node=node,
                             )
                         )
-                        if (
-                            else_node
-                            and else_node.stmts
-                            and not isinstance(else_node.stmts[-1], ast.Break)
-                        ):
-                            node.stmts.extend(else_node.stmts)
+                        has_else = False
                         if_node.unlink_successor(node)
                         if_node.unlink_successor(if_node)
-                        has_been_unparsed = True
-                    if not has_been_unparsed:
-                        if if_item is None or not if_node or if_node.stmts:
-
-                            branches_meet = (
-                                if_node and else_node and if_node.next is else_node.next
+                    else:
+                        node.add_stmt(
+                            ast.If(
+                                test=test,
+                                body=body_stmts,
+                                orelse=orelse_stmts if has_else else [],
+                                _origin_node=node,
                             )
+                        )
+                    if not has_else:
+                        node.stmts.extend(orelse_stmts)
 
-                            body_stmts = []
-                            if if_node and if_node.stmts:
-                                body_stmts.extend(if_node.stmts)
-                            else:
-                                body_stmts.append(ast.Pass())
+                if if_item:
+                    if else_item:
+                        ternary_expr = ast.IfExp(
+                            test=test,
+                            body=if_item,
+                            orelse=else_item,
+                        )
+                        node.add_stack(ternary_expr)
+                    else:
+                        bool_expr = make_bool_op(
+                            op=ast.Or() if "IF_TRUE" in node.opname else ast.And(),
+                            values=[
+                                test if "IF_FALSE" in node.opname else negate(test),
+                                if_item,
+                            ],
+                        )
+                        node.add_stack(bool_expr)
 
-                            orelse_stmts = []
-                            if else_node and else_node.stmts:
-                                orelse_stmts.extend(else_node.stmts)
-                            elif (
-                                not branches_meet
-                                and loop_heads
-                                and else_loop_head is not loop_heads[-1]
-                            ):
-                                orelse_stmts.append(
-                                    ast.Break(_loop_node=else_loop_head)
-                                )
-
-                            has_else = bool(branches_meet) or else_loop_head is not None
-                            node.add_stmt(
-                                ast.If(
-                                    test=(
-                                        test
-                                        if node.opname != "POP_JUMP_IF_TRUE"
-                                        else ast.UnaryOp(
-                                            op=ast.Not(),
-                                            operand=test,
-                                        )
-                                    ),
-                                    body=body_stmts,
-                                    orelse=orelse_stmts if has_else else [],
-                                )
-                            )
-                            if not has_else:
-                                node.stmts.extend(orelse_stmts)
-                        if if_item:
-                            ternary_expr = ast.IfExp(
-                                test=(
-                                    test
-                                    if node.opname == "POP_JUMP_IF_FALSE"
-                                    else ast.UnaryOp(
-                                        op=ast.Not(),
-                                        operand=test,
-                                    )
-                                ),
-                                body=if_item,
-                                orelse=else_item,
-                            )
-                            node.add_stack(ternary_expr)
-
-                    if if_node:
-                        if_node.remove()
-                    if else_node:
-                        else_node.remove()
+                if if_node:
+                    if_node._container = node
+                    if_node.remove()
+                if else_node:
+                    else_node._container = node
+                    else_node.remove()
 
                 if DEBUG:
                     display(node.draw())
@@ -760,7 +918,6 @@ class Node:
                 iter_item._dumped = True
 
                 placeholder = ForTargetPlaceholder()
-                placeholder._origin_offset = node.op_idx
                 placeholder._origin_node = node
 
                 body_node.stack = [*node.stack, iter_item, placeholder]
@@ -812,13 +969,12 @@ class Node:
                 node.prev -= discarded_successors
                 loop_heads = loop_heads[:-1]
             elif node.opname == "COMPARE_OP":
-                if compareop_to_ast[node.arg] != "exception match":
-                    right = node.pop_stack()
-                    left = node.pop_stack()
-                else:
-                    left = node.pop_stack()
-                    # right = stack.pop()[1]
-                    right = None
+                right = (
+                    node.pop_stack()
+                    if compareop_to_ast[node.arg] != "exception match"
+                    else None
+                )
+                left = node.pop_stack()
                 node.add_stack(
                     ast.Compare(
                         left=left,
@@ -988,7 +1144,8 @@ class Node:
                 # if we can loop to the collection beginning
                 if (
                     loop_heads
-                    and explore_until(node, {*loop_heads, collection}) is loop_heads[-1]
+                    and explore_until(node, (*loop_heads[::-1], collection))
+                    is loop_heads[-1]
                 ):
                     node.add_stmt(ComprehensionBody(value, collection))
                 else:
@@ -1007,7 +1164,8 @@ class Node:
                 # if we can loop to the collection beginning
                 if (
                     loop_heads
-                    and explore_until(node, {*loop_heads, collection}) is loop_heads[-1]
+                    and explore_until(node, (*loop_heads[::-1], collection))
+                    is loop_heads[-1]
                 ):
                     node.add_stmt(ComprehensionBody((key, value), collection))
                 else:
@@ -1185,14 +1343,6 @@ class Node:
             if DEBUG:
                 print("LOOP HEADS", "node", node, "PREV", node.prev, "=>", loop_heads)
             while not prev_visited or len(node.stack) <= len(prev_visited[-1].stack):
-                if root.container is not node:
-                    prev = node.contract_backward()
-                else:
-                    prev = None
-                if not prev and not node.prev == {node}:
-                    break
-                if loop_heads and loop_heads[-1] is prev:
-                    loop_heads = (*loop_heads[:-1], node)
                 if node in node.successors:
                     if DEBUG:
                         print("THIS IS A WHILE LOOP")
@@ -1218,7 +1368,18 @@ class Node:
                     prev_unvisited = [n for n in node.prev if not n.visited]
                     if len(prev_unvisited):
                         loop_heads = (*loop_heads, node)
+
+                if root.container is not node:
+                    prev = node.contract_backward()
+                else:
+                    prev = None
+                if not prev and not node.prev == {node}:
+                    break
+                if loop_heads and loop_heads[-1] is prev:
+                    loop_heads = (*loop_heads[:-1], node)
+
                 prev_visited = [n for n in node.prev if n.visited]
+
                 if DEBUG:
                     display(node.draw())
                 if DEBUG:
@@ -1234,7 +1395,9 @@ class Node:
 
             if not node.next and not stop_on_jump:
                 if loop_heads:
-                    jump_to_head = {n: explore_until(n, loop_heads) for n in node.jumps}
+                    jump_to_head = {
+                        n: explore_until(n, loop_heads[::-1]) for n in node.jumps
+                    }
                     if DEBUG:
                         print(
                             f"CANDIDATE JUMPS {node} => {jump_to_head} LOOP HEADS {loop_heads}"
@@ -1292,7 +1455,7 @@ class Node:
 
     def run(self) -> "Node":
         """Decompile a code object"""
-        while_fusions = {}
+        while_fusions = set()
         node = self._run(while_fusions=while_fusions)
         node.stmts = [
             WhileBreakFixer(while_fusions).visit(RemoveLastContinue().visit(stmt))
@@ -1374,12 +1537,10 @@ def process_binding_(node, save_origin=True):
     opname = node.opname
     arg = node.arg
     code = node.code
-    idx = node.op_idx
     opname = opname.split("_")[1]
 
     origin = (
         dict(
-            _origin_offset=idx,
             _origin_node=node,
         )
         if save_origin
@@ -1466,14 +1627,15 @@ def process_store_(node: Node):
             is_multi_assignment = (
                 len(last_stmts)
                 and isinstance(last_stmts[-1], ast.Assign)
-                and get_origin(value)[1] <= get_origin(last_stmts[-1].targets)[1]
+                and get_origin(value).op_idx
+                <= get_origin(last_stmts[-1].targets).op_idx
             )
             if DEBUG:
                 print(
                     f"ORIGIN of {ast.dump(value)}",
-                    get_origin(value)[1],
+                    get_origin(value),
                     f"vs ORIGIN of last {ast.dump(last_stmts[-1])}",
-                    get_origin(last_stmts[-1].targets)[1],
+                    get_origin(last_stmts[-1].targets),
                 )
         except Exception:
             is_multi_assignment = False

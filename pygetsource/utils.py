@@ -110,22 +110,3 @@ def graph_sort(root):
     # TODO handle disjoint components
     dfs(root)
     return order[::-1]
-
-
-def get_origin(trees: ast.AST):
-    offset = None
-    origin = None
-    if isinstance(trees, ast.AST):
-        trees = [trees]
-    for tree in trees:
-        for node in ast.walk(tree):
-            try:
-                if offset is None:
-                    offset = node._origin_offset
-                    origin = node._origin_node
-                elif node._origin_offset < offset:
-                    offset = node._origin_offset
-                    origin = node._origin_node
-            except AttributeError:
-                pass
-        return origin, offset

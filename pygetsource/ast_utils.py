@@ -118,7 +118,6 @@ class RemoveLastContinue(ast.NodeTransformer):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.can_remove_continue = False
-        self.current_loops = []
 
     def generic_visit(self, node):
         for field, old_value in ast.iter_fields(node):
@@ -142,9 +141,6 @@ class RemoveLastContinue(ast.NodeTransformer):
                             value = self.visit(value)
                             if value is None:
                                 continue
-                            elif not isinstance(value, ast.AST):
-                                new_body.extend(value)
-                                continue
                         new_body.append(value)
                 self.can_remove_continue = last_val
                 old_value[:] = new_body
@@ -155,17 +151,8 @@ class RemoveLastContinue(ast.NodeTransformer):
                         value = self.visit(value)
                         if value is None:
                             continue
-                        elif not isinstance(value, ast.AST):
-                            new_values.extend(value)
-                            continue
                     new_values.append(value)
                 old_value[:] = new_values
-            elif isinstance(old_value, ast.AST):
-                new_node = self.visit(old_value)
-                if new_node is None:
-                    delattr(node, field)
-                else:
-                    setattr(node, field, new_node)
         return node
 
     def visit_Continue(self, node):
@@ -179,6 +166,74 @@ class WhileBreakFixer(ast.NodeTransformer):
         self.while_fusions = while_fusions
 
     def visit_Break(self, node):
-        if hasattr(node, "_loop_node") and node._loop_node in self.while_fusions:
-            return ast.Continue()
+        if hasattr(node, "_loop_node"):
+            if node._loop_node in self.while_fusions:
+                return ast.Continue()
         return node
+
+
+def negate(node):
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+        return node.operand
+    if isinstance(node, ast.BoolOp) and isinstance(node.op, ast.Or):
+        # num_neg = sum(isinstance(n, ast.UnaryOp) and isinstance(n.op, ast.Not) for n in node.values)
+        # if num_neg > len(node.values) / 2:
+        return ast.BoolOp(op=ast.And(), values=[negate(n) for n in node.values])
+    if isinstance(node, ast.BoolOp) and isinstance(node.op, ast.And):
+        # num_neg = sum(isinstance(n, ast.UnaryOp) and isinstance(n.op, ast.Not) for n in node.values)
+        # if num_neg > len(node.values) / 2:
+        return ast.BoolOp(op=ast.Or(), values=[negate(n) for n in node.values])
+    return ast.UnaryOp(op=ast.Not(), operand=node)
+
+
+def get_origin(trees: ast.AST):
+    origin = None
+    offset = None
+    if isinstance(trees, ast.AST):
+        trees = [trees]
+    for tree in trees:
+        for node in ast.walk(tree):
+            try:
+                if offset is None or node._origin.offset < offset:
+                    origin = node._origin_node
+            except AttributeError:
+                pass
+        return origin
+
+
+def walk_with_parent(node):
+    """
+    Recursively yield all descendant nodes in the tree starting at *node*
+    (including *node* itself), in no specified order.  This is useful if you
+    only want to modify nodes in place and don't care about the context.
+    """
+    from collections import deque
+
+    todo = deque([(None, node)])
+    while todo:
+        parent, node = todo.popleft()
+        todo.extend((node, child) for child in ast.iter_child_nodes(node))
+        yield parent, node
+
+
+def remove_from_parent(item: ast.AST, parent: ast.AST):
+    for field, old_value in ast.iter_fields(parent):
+        if isinstance(old_value, list):
+            if item in old_value:
+                old_value.remove(item)
+                return True
+        elif old_value is item:
+            delattr(parent, field)
+            return True
+    return False
+
+
+def make_bool_op(op, values):
+    assert len(values) > 0 and isinstance(op, (ast.And, ast.Or))
+    new_values = []
+    for v in values:
+        if isinstance(v, ast.BoolOp) and isinstance(v.op, op.__class__):
+            new_values.extend(v.values)
+        else:
+            new_values.append(v)
+    return ast.BoolOp(op=op, values=new_values)
