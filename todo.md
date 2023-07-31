@@ -21,17 +21,17 @@ Current supported opcodes and syntaxes
 - [x] BINARY_XOR
 - [x] BUILD_CONST_KEY_MAP
 - [x] BUILD_LIST
-- [ ] BUILD_LIST_UNPACK
+- [x] BUILD_LIST_UNPACK
 - [x] BUILD_MAP
-- [ ] BUILD_MAP_UNPACK
-- [ ] BUILD_MAP_UNPACK_WITH_CALL
+- [x] BUILD_MAP_UNPACK
+- [x] BUILD_MAP_UNPACK_WITH_CALL
 - [x] BUILD_SET
-- [ ] BUILD_SET_UNPACK
+- [x] BUILD_SET_UNPACK
 - [x] BUILD_SLICE
 - [x] BUILD_STRING
 - [x] BUILD_TUPLE
-- [ ] BUILD_TUPLE_UNPACK
-- [ ] BUILD_TUPLE_UNPACK_WITH_CALL
+- [x] BUILD_TUPLE_UNPACK
+- [x] BUILD_TUPLE_UNPACK_WITH_CALL
 - [ ] CALL_FINALLY
 - [x] CALL_FUNCTION
 - [x] CALL_FUNCTION_EX
@@ -87,9 +87,9 @@ Current supported opcodes and syntaxes
 - [x] IS_OP
 - [x] JUMP_ABSOLUTE
 - [x] JUMP_FORWARD
-- [ ] JUMP_IF_FALSE_OR_POP
+- [x] JUMP_IF_FALSE_OR_POP
+- [x] JUMP_IF_TRUE_OR_POP
 - [ ] JUMP_IF_NOT_EXC_MATCH
-- [ ] JUMP_IF_TRUE_OR_POP
 - [x] LIST_APPEND
 - [x] LIST_EXTEND
 - [x] LIST_TO_TUPLE
@@ -176,7 +176,7 @@ Current supported opcodes and syntaxes
 - [x] Nonlocal: see `pygetsource.getfactory`
 - [x] Expr
 - [x] Pass | Break | Continue
-- [ ] BoolOp
+- [x] BoolOp
 - [ ] NamedExpr
 - [x] BinOp
 - [x] UnaryOp
