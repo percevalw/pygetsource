@@ -2,16 +2,17 @@
 name = "pygetsource"
 description = "A Python 3 decompiler"
 authors = [
-    { name = "Perceval Wajsburt", email = "perceval.wajsburt@gmail.com" }
+    { name = "Perceval Wajsbürt", email = "perceval.wajsburt@gmail.com" }
 ]
 readme = "README.md"
 license = { file = "LICENSE" }
-urls.homepage = "https://github.com/perceval/pygetsource/"
-urls.repository = "https://github.com/perceval/pygetsource/"
+urls.homepage = "https://github.com/percevalw/pygetsource/"
+urls.repository = "https://github.com/percevalw/pygetsource/"
 dynamic = ["version"]
 requires-python = ">=3.7,<4.0"
 dependencies = [
     "astunparse",
+    "typing_extensions",
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",
