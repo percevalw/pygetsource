@@ -1,4 +1,5 @@
 import ast
+import inspect
 
 
 class Unpacking(ast.AST):
@@ -237,3 +238,18 @@ def make_bool_op(op, values):
         else:
             new_values.append(v)
     return ast.BoolOp(op=op, values=new_values)
+
+
+def reconstruct_arguments_str(code):
+    arg_details = inspect.getargs(code)
+    sig = []
+    if len(arg_details.args):
+        sig.append(", ".join(arg_details.args))
+    keyword_only_args = getattr(arg_details, "kwonlyargs", None)
+    if keyword_only_args:
+        sig.append("*, " + ", ".join(keyword_only_args))
+    if arg_details.varargs:
+        sig.append("*" + arg_details.varargs)
+    if arg_details.varkw:
+        sig.append("**" + arg_details.varkw)
+    return ", ".join(sig)
