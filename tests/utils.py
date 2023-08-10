@@ -44,7 +44,7 @@ def prune_and_compare(code1: CodeType, code2: CodeType):
 
 def make_test_idem(func):
     def test():
-        source_code = getfactory(func.__code__)
+        source_code = getfactory(func.__code__, strategy="decompile")
         res = {}
         exec(source_code, res, res)
         recompiled: Callable = res["_fn_"]

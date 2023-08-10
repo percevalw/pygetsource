@@ -19,6 +19,7 @@ from .ast_utils import (
     get_origin,
     make_bool_op,
     negate,
+    reconstruct_arguments_str,
     remove_from_parent,
     walk_with_parent,
 )
@@ -829,7 +830,6 @@ class Node:
                 )
 
                 if if_item is None or not if_node or if_node.stmts:
-
                     is_loop = node.is_conditional_while or node in node.next.successors
 
                     body_stmts = []
@@ -1265,7 +1265,6 @@ class Node:
                 args = [node.pop_stack() for _ in range(node.arg)][::-1]
                 func = node.pop_stack()
                 if isinstance(func, ast.FunctionDef):
-
                     assert len(func.body) == 2
                     tree = RewriteComprehensionArgs(args=args).visit(func)
 
@@ -1529,7 +1528,11 @@ class Node:
         return node
 
 
-def getsource(code: CodeType, debug: bool = False) -> str:
+def getsource(
+    code: CodeType,
+    debug: bool = False,
+    as_function: Optional[str] = None,
+) -> str:
     """
     Decompile a code object
 
@@ -1539,12 +1542,26 @@ def getsource(code: CodeType, debug: bool = False) -> str:
         The code object to decompile
     debug: bool
         Whether to activate the debugging mode and visualize the graph reductions
+    as_function: Optional[str]
+        If provided, the code will be decompiled as a function with the given name
     """
     with set_debug(debug):
         node = Node.from_code(code)
         if DEBUG:
             display(node.draw())
-        return node.run().to_source()
+        node = node.run()
+        function_body = node.to_source()
+
+    if not as_function:
+        return function_body
+
+    function_name = "_fn_"
+    def_str = "def"
+
+    return (
+        f"{def_str} {function_name}({reconstruct_arguments_str(code)}):\n"
+        + f"{textwrap.indent(function_body, '  ')}\n"
+    )
 
 
 def detect_first_node(root):
