@@ -120,6 +120,7 @@ hasjabs = [
     "JUMP_IF_TRUE_OR_POP",
     "JUMP_IF_NOT_EXC_MATCH",
     "SETUP_FINALLY",
+    "SEND",
 ]
 
 no_ops = [
