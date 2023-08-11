@@ -970,3 +970,23 @@ def test_bool_or_of_and_assign():
 @make_test_idem
 def test_bool_target_in_comprehension():
     return [(x or y or z) and (a or b) and (c or d) for i in range(10)]
+
+
+@make_test_idem
+async def test_await_simple():
+    await z
+
+
+@make_test_idem
+async def test_await_store():
+    x = await z
+
+
+@make_test_idem
+def test_yield_from_simple():
+    yield from z
+
+
+@make_test_idem
+def test_yield_from_store():
+    x = yield from z

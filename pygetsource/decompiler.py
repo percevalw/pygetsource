@@ -281,7 +281,7 @@ class Node:
 
             if opname == "RETURN_VALUE":
                 pass
-            elif opname == "JUMP_FORWARD":
+            elif opname in ("JUMP_FORWARD", "SEND"):
                 block.jumps.add(graph[block.offset + arg])
             elif opname == "JUMP_BACKWARD":
                 block.jumps.add(graph[block.offset - arg])
@@ -933,6 +933,18 @@ class Node:
             elif node.opname == "GET_ITER":
                 # During eval, pop and applies iter() to TOS
                 pass
+            elif node.opname == "GET_AWAITABLE":
+                # During eval, pop and applies iter() to TOS
+                node.add_stack(ast.Await(value=node.pop_stack()))
+            elif node.opname == "GET_YIELD_FROM_ITER":
+                # During eval, pop and applies iter() to TOS
+                node.add_stack(ast.YieldFrom(value=node.pop_stack()))
+            elif node.opname in ("YIELD_FROM", "SEND"):
+                # SEND is the python 3.11 replacement for YIELD_FROM
+                node.pop_stack()  # sentinel/placeholder value
+                # And do nothing, Python will delegate to the generator
+                # but that's none of our business in the context of
+                # decompiling the function
             elif node.opname == "FOR_ITER":
                 old_body_node = body_node = node.next
                 (jump_node,) = node.jumps
@@ -1555,8 +1567,12 @@ def getsource(
     if not as_function:
         return function_body
 
+    is_async = any(
+        isinstance(item, ast.Await) for stmt in node.stmts for item in ast.walk(stmt)
+    )
+
     function_name = "_fn_"
-    def_str = "def"
+    def_str = "async def" if is_async else "def"
 
     return (
         f"{def_str} {function_name}({reconstruct_arguments_str(code)}):\n"

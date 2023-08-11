@@ -64,10 +64,10 @@ Current supported opcodes and syntaxes
 - [x] GEN_START
 - [ ] GET_AITER
 - [ ] GET_ANEXT
-- [ ] GET_AWAITABLE
+- [x] GET_AWAITABLE
 - [x] GET_ITER
 - [ ] GET_LEN
-- [ ] GET_YIELD_FROM_ITER
+- [x] GET_YIELD_FROM_ITER
 - [ ] IMPORT_FROM
 - [ ] IMPORT_NAME
 - [ ] IMPORT_STAR
@@ -146,7 +146,7 @@ Current supported opcodes and syntaxes
 - [ ] WITH_CLEANUP_FINISH
 - [ ] WITH_CLEANUP_START
 - [ ] WITH_EXCEPT_START
-- [ ] YIELD_FROM
+- [x] YIELD_FROM
 - [ ] YIELD_VALUE
 - [x] CACHE
 - [x] PUSH_NULL
@@ -162,7 +162,7 @@ Current supported opcodes and syntaxes
 - [x] POP_JUMP_FORWARD_IF_TRUE
 - [x] COPY
 - [x] BINARY_OP
-- [ ] SEND
+- [x] SEND
 - [ ] POP_JUMP_FORWARD_IF_NOT_NONE
 - [ ] POP_JUMP_FORWARD_IF_NONE
 - [ ] JUMP_BACKWARD_NO_INTERRUPT
@@ -217,9 +217,9 @@ Current supported opcodes and syntaxes
 - [x] SetComp
 - [x] DictComp
 - [x] GeneratorExp
-- [ ] Await
+- [x] Await
 - [ ] Yield
-- [ ] YieldFrom
+- [x] YieldFrom
 - [x] Compare
 - [x] Call
 - [x] FormattedValue
