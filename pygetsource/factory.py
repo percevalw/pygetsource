@@ -14,7 +14,15 @@ def inspect_function_code(code: CodeType):
     tree = ast.parse(textwrap.dedent(source_code))
     body = tree.body[0]
     lines = source_code.splitlines()
-    function_body = textwrap.dedent("\n".join(lines[body.body[0].lineno - 1 :]))
+    body_lines = lines[body.body[0].lineno - 1 :]
+    if (
+        "\n".join(body_lines).count('"""') % 2 == 1 and body_lines[0].strip() == '"""'
+    ) or (
+        "\n".join(body_lines).count("'''") % 2 == 1 and body_lines[0].strip() == "'''"
+    ):
+        body_lines = body_lines[1:]
+
+    function_body = textwrap.dedent("\n".join(body_lines))
     def_str = "async def" if isinstance(body, ast.AsyncFunctionDef) else "def"
     function_name = body.name
 

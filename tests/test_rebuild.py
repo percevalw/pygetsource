@@ -71,3 +71,17 @@ def test_lambda_inspect_fail():
 
     with pytest.raises(ValueError):
         getfactory(func.__code__, strategy="inspect")
+
+
+def test_inspect_docstring():
+    def func(a, b):
+        """
+        My docstring
+        """
+        return a + b
+
+    source_code = getfactory(func.__code__, strategy="inspect")
+    res = {}
+    exec(source_code, res, res)
+    recompiled: Callable = res["_fn_"]
+    assert recompiled(1, 2) == 3
