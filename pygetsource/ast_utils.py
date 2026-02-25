@@ -66,13 +66,24 @@ class RewriteComprehensionArgs(ast.NodeTransformer):
         iter = self.visit(node.iter)
         condition = None
         if isinstance(elt, ast.If):
-            condition = elt.test
-            assert (
+            # py312 inline comprehensions often rewrite filters as:
+            # if negated-cond: continue
+            # else: comprehension body
+            if (
                 len(elt.body) == 1
-                or len(elt.body) == 2
-                and isinstance(elt.body[1], ast.Continue)
-            )
-            elt = elt.body[0]
+                and isinstance(elt.body[0], ast.Continue)
+                and len(elt.orelse) == 1
+            ):
+                condition = negate(elt.test)
+                elt = elt.orelse[0]
+            else:
+                condition = elt.test
+                assert (
+                    len(elt.body) == 1
+                    or len(elt.body) == 2
+                    and isinstance(elt.body[1], ast.Continue)
+                )
+                elt = elt.body[0]
         generators = [
             ast.comprehension(
                 target=target,

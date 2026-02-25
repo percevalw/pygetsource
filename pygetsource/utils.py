@@ -125,6 +125,10 @@ hasjabs = [
 
 no_ops = [
     "NOP",
+    "END_FOR",
+    "END_SEND",
+    "CLEANUP_THROW",
+    "JUMP_BACKWARD_NO_INTERRUPT",
     "POP_BLOCK",
     "SETUP_LOOP",
     "RESUME",

@@ -1,11 +1,10 @@
 import ast
+import copy
 import dis
 import sys
 import textwrap
 from types import CodeType
 from typing import List, Optional, Set, Tuple
-
-from IPython.display import display
 
 from .ast_utils import (
     ComprehensionBody,
@@ -188,7 +187,8 @@ class Node:
         # If the node has a single predecessor, merge it with that node
 
         prev_node = next((n for n in self.prev if n.next is self), None)
-        assert prev_node and len(self.prev) == 1
+        if not prev_node or len(self.prev) != 1:
+            return None
 
         prev_node._container = self._container
         if DEBUG:
@@ -293,7 +293,10 @@ class Node:
                 "JUMP_IF_NOT_EXC_MATCH",
             ):
                 block.next = graph[block.offset]
-                block.jumps.add(graph[arg])
+                if sys.version_info >= (3, 12):
+                    block.jumps.add(graph[block.offset + arg])
+                else:
+                    block.jumps.add(graph[arg])
             elif opname in (
                 "JUMP_IF_TRUE_OR_POP",
                 "JUMP_IF_FALSE_OR_POP",
@@ -303,8 +306,17 @@ class Node:
                     block.jumps.add(graph[arg])
                 else:
                     block.jumps.add(graph[block.offset + arg])
+            elif opname == "FOR_ITER":
+                block.next = graph[block.offset]
+                # py312 FOR_ITER delta ends up after END_FOR.
+                # so we account for the inline cache entry that follows FOR_ITER.
+                if sys.version_info >= (3, 12):
+                    block.jumps.add(graph[block.offset + arg + 2])
+                elif graph[block.offset + arg].opname == "POP_BLOCK":
+                    block.jumps.add(graph[block.offset + arg + 2])
+                else:
+                    block.jumps.add(graph[block.offset + arg])
             elif opname in (
-                "FOR_ITER",
                 "SETUP_FINALLY",
                 "SETUP_LOOP",
                 "POP_JUMP_FORWARD_IF_FALSE",
@@ -397,9 +409,15 @@ class Node:
             elif opname == "CONST":
                 return repr(self.code.co_consts[self.arg])
             elif opname in ("ATTR", "METHOD"):
-                return self.code.co_names[self.arg]
+                name_index = (
+                    self.arg >> 1
+                    if sys.version_info >= (3, 11) and self.opname == "LOAD_ATTR"
+                    else self.arg
+                )
+                return self.code.co_names[name_index]
         elif opname.startswith("COMPARE_OP"):
-            return dis.cmp_op[self.arg]
+            compare_arg = self.arg >> 4 if sys.version_info >= (3, 12) else self.arg
+            return dis.cmp_op[compare_arg]
         elif opname.startswith("BINARY_OP"):
             return dis._nb_ops[self.arg][1]
         else:
@@ -507,6 +525,8 @@ class Node:
 
         if not node.is_ready or node.visited:
             return None
+        if DEBUG:
+            from IPython.display import display
 
         while True:
             if DEBUG:
@@ -560,7 +580,20 @@ class Node:
                 node.add_stmt(ast.Delete([node.pop_stack()]))
             elif node.opname == "RETURN_VALUE":
                 node.add_stmt(ast.Return(node.pop_stack()))
-            elif node.opname in ("JUMP_FORWARD", "JUMP_ABSOLUTE", "JUMP_BACKWARD"):
+            elif node.opname == "RETURN_CONST":
+                node.add_stmt(
+                    ast.Return(
+                        ast.Constant(
+                            value=node.code.co_consts[node.arg],
+                            kind=None,
+                        )
+                    )
+                )
+            elif node.opname in (
+                "JUMP_FORWARD",
+                "JUMP_ABSOLUTE",
+                "JUMP_BACKWARD",
+            ):
                 jump = next(iter(node.jumps))
 
                 # If we don't leave any loop
@@ -866,29 +899,40 @@ class Node:
                             node in node.next.successors,
                         )
                         print("ELSE LOOP HEAD", else_loop_head, loop_heads)
-                    if is_loop and (len(orelse_stmts) == 0 or else_loop_head is None):
-                        node.add_stmt(
-                            ast.While(
-                                test=test,
-                                body=body_stmts,
-                                orelse=[],
-                                _origin_node=node,
-                            )
-                        )
-                        has_else = False
-                        if_node.unlink_successor(node)
-                        if_node.unlink_successor(if_node)
+                    folded_stmts = (
+                        try_fold_if_assignment_return(test, body_stmts, orelse_stmts)
+                        if not is_loop and not has_else
+                        else None
+                    )
+
+                    if folded_stmts is not None:
+                        node.stmts.extend(folded_stmts)
                     else:
-                        node.add_stmt(
-                            ast.If(
-                                test=test,
-                                body=body_stmts,
-                                orelse=orelse_stmts if has_else else [],
-                                _origin_node=node,
+                        if is_loop and (
+                            len(orelse_stmts) == 0 or else_loop_head is None
+                        ):
+                            node.add_stmt(
+                                ast.While(
+                                    test=test,
+                                    body=body_stmts,
+                                    orelse=[],
+                                    _origin_node=node,
+                                )
                             )
-                        )
-                    if not has_else:
-                        node.stmts.extend(orelse_stmts)
+                            has_else = False
+                            if_node.unlink_successor(node)
+                            if_node.unlink_successor(if_node)
+                        else:
+                            node.add_stmt(
+                                ast.If(
+                                    test=test,
+                                    body=body_stmts,
+                                    orelse=orelse_stmts if has_else else [],
+                                    _origin_node=node,
+                                )
+                            )
+                        if not has_else:
+                            node.stmts.extend(orelse_stmts)
 
                 if if_item:
                     if else_item:
@@ -1004,16 +1048,17 @@ class Node:
                 node.prev -= discarded_successors
                 loop_heads = loop_heads[:-1]
             elif node.opname == "COMPARE_OP":
+                compare_arg = node.arg >> 4 if sys.version_info >= (3, 12) else node.arg
                 right = (
                     node.pop_stack()
-                    if compareop_to_ast[node.arg] != "exception match"
+                    if compareop_to_ast[compare_arg] != "exception match"
                     else None
                 )
                 left = node.pop_stack()
                 node.add_stack(
                     ast.Compare(
                         left=left,
-                        ops=[compareop_to_ast[node.arg]],
+                        ops=[compareop_to_ast[compare_arg]],
                         comparators=[right],
                     ),
                 )
@@ -1062,6 +1107,16 @@ class Node:
                 slice = node.pop_stack()
                 value = node.pop_stack()
                 node.add_stack(ast.Subscript(value, slice))
+            elif node.opname == "BINARY_SLICE":
+                upper = node.pop_stack()
+                lower = node.pop_stack()
+                value = node.pop_stack()
+                node.add_stack(
+                    ast.Subscript(
+                        valpue=value,
+                        slice=ast.Slice(lower=lower, upper=upper, step=None),
+                    )
+                )
             elif node.opname in unaryop_to_ast:
                 value = node.pop_stack()
                 node.add_stack(
@@ -1264,6 +1319,32 @@ class Node:
             elif node.opname == "KW_NAMES":
                 kw_names = node.code.co_consts[node.arg]
                 print("KWNAMES", kw_names)
+            elif node.opname == "CALL_INTRINSIC_1":
+                # py312 intrinsic calls:
+                # 3: INTRINSIC_STOPITERATION_ERROR
+                # 5: INTRINSIC_UNARY_POSITIVE
+                # 6: INTRINSIC_LIST_TO_TUPLE
+                if node.arg == 3:
+                    pass
+                elif node.arg == 5:
+                    value = node.pop_stack()
+                    node.add_stack(ast.UnaryOp(op=ast.UAdd(), operand=value))
+                elif node.arg == 6:
+                    value = node.pop_stack()
+                    if hasattr(value, "elts"):
+                        node.add_stack(ast.Tuple(elts=value.elts))
+                    elif isinstance(value, ast.Constant) and isinstance(
+                        value.value, (tuple, list)
+                    ):
+                        node.add_stack(
+                            ast.Tuple(
+                                [ast.Constant(value=v, kind=None) for v in value.value]
+                            )
+                        )
+                    else:
+                        node.add_stack(ast.Tuple([ast.Starred(value)]))
+                else:
+                    raise NotImplementedError((node.opname, node.arg))
             elif node.opname in ("CALL_FUNCTION", "CALL_METHOD", "CALL"):
                 if (
                     node.arg == 0
@@ -1277,11 +1358,20 @@ class Node:
                 args = [node.pop_stack() for _ in range(node.arg)][::-1]
                 func = node.pop_stack()
                 if isinstance(func, ast.FunctionDef):
-                    assert len(func.body) == 2
                     tree = RewriteComprehensionArgs(args=args).visit(func)
-
-                    if len(func.body) == 1 or isinstance(func.body[1], ast.Return):
-                        tree = func.body[0]
+                    if isinstance(tree, ast.FunctionDef):
+                        first_stmt = tree.body[0] if tree.body else None
+                        if isinstance(
+                            first_stmt,
+                            (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp),
+                        ):
+                            tree = first_stmt
+                        elif (
+                            len(tree.body) == 1
+                            or len(tree.body) > 1
+                            and isinstance(tree.body[1], ast.Return)
+                        ):
+                            tree = tree.body[0]
                     node.add_stack(tree)
                 else:
                     node.add_stack(
@@ -1348,16 +1438,19 @@ class Node:
                 s = node.stack
                 s[-1], s[-2], s[-3], s[-4] = s[-2], s[-3], s[-4], s[-1]
             elif node.opname == "POP_TOP":
-                item = node.pop_stack()
-                if item and not getattr(item, "_dumped", False):
-                    node.add_stmt(ast.Expr(item))
+                if node.stack:
+                    item = node.pop_stack()
+                    if item and not getattr(item, "_dumped", False):
+                        node.add_stmt(ast.Expr(item))
             elif node.opname == "COPY":
-                node.stack.append(node.stack[-node.arg])
+                if len(node.stack) >= node.arg:
+                    node.stack.append(node.stack[-node.arg])
             elif node.opname == "SWAP":
-                (node.stack[-1], node.stack[-node.arg]) = (
-                    node.stack[-node.arg],
-                    node.stack[-1],
-                )
+                if len(node.stack) >= node.arg:
+                    (node.stack[-1], node.stack[-node.arg]) = (
+                        node.stack[-node.arg],
+                        node.stack[-1],
+                    )
             elif node.opname == "POP_EXCEPT":
                 node.pop_stack()
             elif node.opname == "RETURN_GENERATOR":
@@ -1536,6 +1629,8 @@ class Node:
             WhileBreakFixer(while_fusions).visit(RemoveLastContinue().visit(stmt))
             for stmt in node.stmts
         ]
+        node.stmts = regroup_if_assignment_return_sequences(node.stmts)
+        node.stmts = regroup_inline_comprehension_returns(node.stmts)
 
         return node
 
@@ -1560,6 +1655,8 @@ def getsource(
     with set_debug(debug):
         node = Node.from_code(code)
         if DEBUG:
+            from IPython.display import display
+
             display(node.draw())
         node = node.run()
         function_body = node.to_source()
@@ -1629,12 +1726,215 @@ def explore_until(root, stop_nodes):
     return rec(root)
 
 
+def ast_equal(a, b):
+    return ast.dump(a, include_attributes=False) == ast.dump(
+        b, include_attributes=False
+    )
+
+
+def merge_conditional_values(test, body_value, orelse_value):
+    if ast_equal(body_value, orelse_value):
+        return body_value
+
+    if isinstance(body_value, ast.Dict) and isinstance(orelse_value, ast.Dict):
+        if len(body_value.keys) != len(orelse_value.keys):
+            return None
+        if any(
+            not ast_equal(body_key, else_key)
+            for body_key, else_key in zip(body_value.keys, orelse_value.keys)
+        ):
+            return None
+
+        merged_values = []
+        for body_item, else_item in zip(body_value.values, orelse_value.values):
+            if ast_equal(body_item, else_item):
+                merged_values.append(body_item)
+            else:
+                merged_values.append(
+                    ast.IfExp(
+                        test=copy.deepcopy(test),
+                        body=body_item,
+                        orelse=else_item,
+                    )
+                )
+
+        return ast.Dict(keys=body_value.keys, values=merged_values)
+
+    return ast.IfExp(
+        test=copy.deepcopy(test),
+        body=body_value,
+        orelse=orelse_value,
+    )
+
+
+def try_fold_if_assignment_return(test, body_stmts, orelse_stmts):
+    if len(body_stmts) != 2 or len(orelse_stmts) != 2:
+        return None
+
+    body_assign, body_return = body_stmts
+    else_assign, else_return = orelse_stmts
+
+    if not (
+        isinstance(body_assign, ast.Assign)
+        and isinstance(else_assign, ast.Assign)
+        and isinstance(body_return, ast.Return)
+        and isinstance(else_return, ast.Return)
+    ):
+        return None
+
+    if len(body_assign.targets) != 1 or len(else_assign.targets) != 1:
+        return None
+
+    body_target = body_assign.targets[0]
+    else_target = else_assign.targets[0]
+    if not (
+        isinstance(body_target, ast.Name)
+        and isinstance(else_target, ast.Name)
+        and body_target.id == else_target.id
+    ):
+        return None
+
+    if not ast_equal(body_return.value, else_return.value):
+        return None
+
+    merged_value = merge_conditional_values(test, body_assign.value, else_assign.value)
+    if merged_value is None:
+        return None
+
+    return [
+        ast.Assign(targets=[body_target], value=merged_value),
+        body_return,
+    ]
+
+
+def regroup_if_assignment_return_sequences(stmts):
+    def rec(stmt):
+        if isinstance(stmt, ast.If):
+            stmt.body = regroup_if_assignment_return_sequences(stmt.body)
+            stmt.orelse = regroup_if_assignment_return_sequences(stmt.orelse)
+        elif isinstance(stmt, (ast.For, ast.While)):
+            stmt.body = regroup_if_assignment_return_sequences(stmt.body)
+            stmt.orelse = regroup_if_assignment_return_sequences(stmt.orelse)
+        elif isinstance(stmt, ast.Try):
+            stmt.body = regroup_if_assignment_return_sequences(stmt.body)
+            stmt.orelse = regroup_if_assignment_return_sequences(stmt.orelse)
+            stmt.finalbody = regroup_if_assignment_return_sequences(stmt.finalbody)
+            for handler in stmt.handlers:
+                handler.body = regroup_if_assignment_return_sequences(handler.body)
+        return stmt
+
+    rewritten = []
+    i = 0
+    while i < len(stmts):
+        stmt = rec(stmts[i])
+
+        if isinstance(stmt, ast.If) and not stmt.orelse and i + 2 < len(stmts):
+            next_stmt = rec(stmts[i + 1])
+            next_next_stmt = rec(stmts[i + 2])
+            folded = try_fold_if_assignment_return(
+                stmt.test,
+                stmt.body,
+                [next_stmt, next_next_stmt],
+            )
+            if folded is not None:
+                rewritten.extend(folded)
+                i += 3
+                continue
+
+        rewritten.append(stmt)
+        i += 1
+
+    return rewritten
+
+
+def _extract_name_ids(node):
+    if isinstance(node, ast.Name):
+        return [node.id]
+    if isinstance(node, (ast.Tuple, ast.List)):
+        ids = []
+        for elt in node.elts:
+            if not isinstance(elt, ast.Name):
+                return None
+            ids.append(elt.id)
+        return ids
+    return None
+
+
+def is_restore_assign(stmt):
+    if not (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1):
+        return False
+
+    target_ids = _extract_name_ids(stmt.targets[0])
+    value_ids = _extract_name_ids(stmt.value)
+    return target_ids is not None and target_ids == value_ids
+
+
+def regroup_inline_comprehension_returns(stmts):
+    def rec(stmt):
+        if isinstance(stmt, ast.If):
+            stmt.body = regroup_inline_comprehension_returns(stmt.body)
+            stmt.orelse = regroup_inline_comprehension_returns(stmt.orelse)
+        elif isinstance(stmt, (ast.For, ast.While)):
+            stmt.body = regroup_inline_comprehension_returns(stmt.body)
+            stmt.orelse = regroup_inline_comprehension_returns(stmt.orelse)
+        elif isinstance(stmt, ast.Try):
+            stmt.body = regroup_inline_comprehension_returns(stmt.body)
+            stmt.orelse = regroup_inline_comprehension_returns(stmt.orelse)
+            stmt.finalbody = regroup_inline_comprehension_returns(stmt.finalbody)
+            for handler in stmt.handlers:
+                handler.body = regroup_inline_comprehension_returns(handler.body)
+        return stmt
+
+    rewritten = []
+    i = 0
+    while i < len(stmts):
+        stmt = rec(stmts[i])
+
+        if isinstance(stmt, ast.For):
+            j = i + 1
+            while j < len(stmts) and is_restore_assign(stmts[j]):
+                j += 1
+
+            if j >= len(stmts) or not isinstance(stmts[j], ast.Return):
+                rewritten.append(stmt)
+                i += 1
+                continue
+
+            try:
+                comp = RewriteComprehensionArgs(args=[]).visit(stmt)
+            except Exception:
+                comp = None
+
+            if comp is not None:
+                ret = stmts[j]
+                rv = ret.value
+                compatible_return = (
+                    isinstance(comp, ast.ListComp)
+                    and isinstance(rv, ast.List)
+                    or isinstance(comp, ast.SetComp)
+                    and isinstance(rv, ast.Set)
+                    or isinstance(comp, ast.DictComp)
+                    and isinstance(rv, ast.Dict)
+                    or isinstance(comp, ast.GeneratorExp)
+                    and isinstance(rv, (ast.Yield, ast.YieldFrom))
+                )
+                if compatible_return:
+                    rewritten.append(ast.Return(comp))
+                    i = j + 1
+                    continue
+
+        rewritten.append(stmt)
+        i += 1
+
+    return rewritten
+
+
 def process_binding_(node, save_origin=True):
     # assert len(block.pred) <= 1
-    opname = node.opname
+    full_opname = node.opname
     arg = node.arg
     code = node.code
-    opname = opname.split("_")[1]
+    opname = full_opname.split("_")[1]
 
     origin = (
         dict(
@@ -1693,10 +1993,17 @@ def process_binding_(node, save_origin=True):
     # ATTRIBUTES
     elif opname in ("ATTR", "METHOD"):
         value = node.pop_stack()
+        # py311 uses LOAD_ATTR's low bit to encode something else
+        # so we shift it to get the right name index.
+        name_index = (
+            arg >> 1
+            if sys.version_info >= (3, 11) and full_opname == "LOAD_ATTR"
+            else arg
+        )
         node.add_stack(
             ast.Attribute(
                 value=value,
-                attr=code.co_names[arg],
+                attr=code.co_names[name_index],
                 **origin,
             )
         )
