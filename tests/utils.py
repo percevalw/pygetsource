@@ -1,8 +1,50 @@
+import dis
+import sys
 from types import CodeType
 from typing import Callable
 
+from opcode import hasjabs
+
 from pygetsource import Node
 from pygetsource.factory import getfactory
+
+
+def nicer_bytecode(x: bytes):
+    s = ""
+    for code, arg in zip(x[::2], x[1::2]):
+        s += f"{dis.opname[code]} {arg}\n"
+    return s
+
+
+def remove_nop_codes(bytecode):
+    NOP = dis.opmap["NOP"]
+    shifts = [0] * (len(bytecode) // 2)
+    res = []
+    for i, (op, arg) in enumerate(zip(bytecode[::2], bytecode[1::2])):
+        if sys.version_info < (3, 10) and dis.opname[op] in hasjabs:
+            arg //= 2
+
+        if op == NOP:
+            for j in range(i + 1, len(shifts)):
+                shifts[j] = (shifts[j - 1] - 1) if j > 0 else 0
+        else:
+            for j in range(i + 1, len(shifts)):
+                shifts[j] = shifts[j - 1] if j > 0 else 0
+
+    for i, (op, arg) in enumerate(zip(bytecode[::2], bytecode[1::2])):
+        opname = dis.opname[op]
+        if sys.version_info < (3, 10) and opname in hasjabs:
+            arg //= 2
+        if op != NOP:
+            if opname in ("JUMP_FORWARD", "FOR_ITER", "SETUP_FINALLY"):
+                arg += shifts[i + arg] - shifts[i]
+            elif "JUMP" in opname:
+                arg += shifts[arg]
+
+            if sys.version_info < (3, 10) and opname in hasjabs:
+                arg *= 2
+            res.extend([op.to_bytes(1, "big"), arg.to_bytes(1, "big")])
+    return b"".join(res)
 
 
 def prune_and_compare(code1: CodeType, code2: CodeType):
@@ -56,9 +98,15 @@ def make_test_idem(func):
         )
         assert len(tgt_codes) == len(gen_codes)
         for tgt_code, gen_code in zip(gen_codes, tgt_codes):
-            assert prune_and_compare(gen_code, tgt_code)
-            # nice_gen = nicer_bytecode(remove_nop_codes(gen_code.co_code))
-            # nice_tgt = nicer_bytecode(remove_nop_codes(tgt_code.co_code))
+            nice_gen = nicer_bytecode(
+                gen_code.co_code
+            )  # remove_nop_codes(gen_code.co_code))
+            nice_tgt = nicer_bytecode(
+                tgt_code.co_code
+            )  # remove_nop_codes(tgt_code.co_code))
             # assert nice_gen == nice_tgt, nice_gen + "\n-----------------\n" + nice_tgt
+            assert prune_and_compare(gen_code, tgt_code), (
+                nice_gen + "\n-----------------\n" + nice_tgt
+            )
 
     return test

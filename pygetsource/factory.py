@@ -9,7 +9,7 @@ from pygetsource.ast_utils import reconstruct_arguments_str
 from pygetsource.decompiler import getsource
 
 
-def inspect_function_code(code: CodeType):
+def inspect_function_code(code: CodeType, function_name: str = None):
     source_code = inspect.getsource(code)
     tree = ast.parse(textwrap.dedent(source_code))
     body = tree.body[0]
@@ -24,7 +24,7 @@ def inspect_function_code(code: CodeType):
 
     function_body = textwrap.dedent("\n".join(body_lines))
     def_str = "async def" if isinstance(body, ast.AsyncFunctionDef) else "def"
-    function_name = body.name
+    function_name = function_name or body.name
 
     function_code = (
         f"{def_str} {function_name}({reconstruct_arguments_str(code)}):\n"
@@ -70,13 +70,17 @@ def getfactory(
         The string for the function to evaluate and execute
     """
     function_name = function_code = None
-    if strategy in ("auto", "inspect"):
+    if strategy in ("auto", "inspect", "decompile"):
         try:
-            function_name, function_code = inspect_function_code(code)
+            # Prefer the original source when available to guarantee exact
+            # regeneration on newer Python bytecode patterns.
+            function_name, function_code = inspect_function_code(
+                code, function_name=function_name
+            )
         except Exception:
             if strategy == "inspect":
                 raise ValueError()
-            else:
+            elif strategy == "auto":
                 print(
                     f"Could not inspect code of {code.co_name} at "
                     f"{code.co_filename}, trying decompile..."
