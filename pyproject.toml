@@ -58,17 +58,30 @@ testpaths = [
 ]
 
 [tool.coverage.report]
-exclude_also = [
+precision = 2
+include = ["pygetsource/*"]
+omit = [
+    "tests/*",
+]
+exclude_lines = [
     "def __repr__",
-    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "@overload",
+    "pragma: no cover",
     "raise .*Error",
     "raise .*Exception",
+    "warn\\(",
     "if __name__ == .__main__.:",
     "if TYPE_CHECKING:",
     "if DEBUG:",
     "class .*\\bProtocol\\):",
     "@(abc\\.)?abstractmethod",
-    ]
+]
+
+[tool.coverage.run]
+include = ["pygetsource/*"]
+concurrency = ["multiprocessing", "thread"]
+parallel = true
 
 # ----- Documentation -----
 [tool.interrogate]
